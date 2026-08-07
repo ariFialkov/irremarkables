@@ -35,12 +35,6 @@ export class UI {
 
   // ---------- MENU ----------
   buildMenu() {
-    const dots = $('power-dots');
-    dots.innerHTML = POWERS.map(() => '<i></i>').join('');
-
-    $('power-prev').addEventListener('click', () => { SFX.click(); this.cyclePower(-1); });
-    $('power-next').addEventListener('click', () => { SFX.click(); this.cyclePower(1); });
-
     const betWrap = $('bet-options');
     betWrap.innerHTML = '';
     for (const b of CONFIG.BETS) {
@@ -63,7 +57,7 @@ export class UI {
       this.onPlay?.(power, this.bet);
     });
 
-    this.renderPowerCard();
+    this.renderPowerGrid();
   }
 
   rollRarePowers() {
@@ -74,31 +68,42 @@ export class UI {
     }
   }
 
-  cyclePower(dir) {
-    this.powerIndex = (this.powerIndex + dir + POWERS.length) % POWERS.length;
-    this.renderPowerCard();
-  }
-
-  renderPowerCard() {
-    const p = POWERS[this.powerIndex];
-    const locked = p.rare && !this.rareUnlocked.has(p.id);
-    $('power-emblem').textContent = p.emblem;
-    $('power-name').textContent = p.name;
-    $('power-desc').textContent = locked
-      ? 'RARE power — not in this lobby rotation. Check back after your next round.'
-      : p.desc;
-    const card = $('power-card');
-    card.classList.toggle('is-rare', p.rare);
-    card.classList.toggle('locked', locked);
-    card.style.boxShadow = `0 8px 40px rgba(0,0,0,0.45), 0 0 26px #${p.color.toString(16).padStart(6, '0')}44`;
-    $('play-btn').disabled = locked;
-    const dots = $('power-dots').children;
-    for (let i = 0; i < dots.length; i++) dots[i].classList.toggle('on', i === this.powerIndex);
+  renderPowerGrid() {
+    // if the current pick got locked by the rotation, hop to the first open power
+    let p = POWERS[this.powerIndex];
+    if (p.rare && !this.rareUnlocked.has(p.id)) {
+      this.powerIndex = POWERS.findIndex((pw) => !pw.rare || this.rareUnlocked.has(pw.id));
+      p = POWERS[this.powerIndex];
+    }
+    const grid = $('power-grid');
+    grid.innerHTML = '';
+    POWERS.forEach((pw, i) => {
+      const locked = pw.rare && !this.rareUnlocked.has(pw.id);
+      const cell = document.createElement('div');
+      cell.className = 'pg-cell'
+        + (i === this.powerIndex ? ' on' : '')
+        + (pw.rare ? ' rare' : '')
+        + (locked ? ' locked' : '');
+      cell.style.setProperty('--pcolor', '#' + pw.color.toString(16).padStart(6, '0'));
+      cell.innerHTML = `<div class="em">${pw.emblem}</div><div class="nm">${pw.name}</div>`;
+      cell.addEventListener('click', () => {
+        SFX.click();
+        if (locked) {
+          $('power-desc').innerHTML = `<b>${pw.name}</b> — RARE power, not in this lobby rotation. Check back after your next round.`;
+          return;
+        }
+        this.powerIndex = i;
+        this.renderPowerGrid();
+      });
+      grid.appendChild(cell);
+    });
+    $('power-desc').innerHTML = `<b>${p.name}</b> — ${p.desc}`;
+    $('play-btn').disabled = false;
   }
 
   showMenu(wallet) {
     this.rollRarePowers();
-    this.renderPowerCard();
+    this.renderPowerGrid();
     $('wallet-value').textContent = formatMoney(wallet);
     // grey out bets the wallet can't cover
     const chips = $('bet-options').children;

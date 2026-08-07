@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
-import { rand, pick } from './utils.js';
+import { rand, pick, RUNTIME } from './utils.js';
 
 const SKIN_TONES = [0xf2c9a0, 0xd9a06b, 0xb07b4f, 0x8a5a3a, 0x6b4630];
 
@@ -55,9 +55,10 @@ function makeLabelSprite(text, color = '#cfe0ff') {
   return spr;
 }
 
-function limb(w, h, d, color) {
-  const geo = new THREE.BoxGeometry(w, h, d);
-  geo.translate(0, -h / 2, 0); // pivot at top
+function limb(r, h, color) {
+  // rounded limb: capsule pivoted at the top
+  const geo = new THREE.CapsuleGeometry(r, h - r * 2, 4, 10);
+  geo.translate(0, -h / 2, 0);
   return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color }));
 }
 
@@ -92,10 +93,9 @@ export class Character {
     const C = this.costume;
     const g = new THREE.Group();
 
-    this.torso = new THREE.Mesh(
-      new THREE.BoxGeometry(0.72, 0.92, 0.42),
-      new THREE.MeshLambertMaterial({ color: C.primary })
-    );
+    const torsoGeo = new THREE.CapsuleGeometry(0.33, 0.52, 6, 12);
+    torsoGeo.scale(1.12, 1, 0.72);
+    this.torso = new THREE.Mesh(torsoGeo, new THREE.MeshLambertMaterial({ color: C.primary }));
     this.torso.position.y = 1.32;
     g.add(this.torso);
 
@@ -142,11 +142,19 @@ export class Character {
       g.add(this.maskBand);
     }
 
-    this.armL = limb(0.2, 0.78, 0.2, C.primary);
-    this.armL.position.set(-0.5, 1.72, 0);
-    this.armR = limb(0.2, 0.78, 0.2, C.primary);
-    this.armR.position.set(0.5, 1.72, 0);
+    this.armL = limb(0.11, 0.78, C.primary);
+    this.armL.position.set(-0.48, 1.72, 0);
+    this.armR = limb(0.11, 0.78, C.primary);
+    this.armR.position.set(0.48, 1.72, 0);
     g.add(this.armL, this.armR);
+
+    // shoulder pads round out the silhouette
+    const shoulderMat = new THREE.MeshLambertMaterial({ color: C.primary });
+    this.shoulderL = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), shoulderMat);
+    this.shoulderL.position.set(-0.48, 1.74, 0);
+    this.shoulderR = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), shoulderMat.clone());
+    this.shoulderR.position.set(0.48, 1.74, 0);
+    g.add(this.shoulderL, this.shoulderR);
 
     if (C.gloves) {
       const gloveMat = new THREE.MeshLambertMaterial({ color: C.accent });
@@ -158,9 +166,9 @@ export class Character {
       this.armR.add(this.gloveR);
     }
 
-    this.legL = limb(0.24, 0.86, 0.24, C.secondary);
+    this.legL = limb(0.13, 0.86, C.secondary);
     this.legL.position.set(-0.2, 0.88, 0);
-    this.legR = limb(0.24, 0.86, 0.24, C.secondary);
+    this.legR = limb(0.13, 0.86, C.secondary);
     this.legR.position.set(0.2, 0.88, 0);
     g.add(this.legL, this.legR);
 
@@ -206,11 +214,21 @@ export class Character {
       g.add(this.label);
     }
 
+    // soft blob shadow grounds the character (stays cheap on mobile)
+    this.blobShadow = new THREE.Mesh(
+      new THREE.CircleGeometry(0.62, 20),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false })
+    );
+    this.blobShadow.rotation.x = -Math.PI / 2;
+    this.blobShadow.position.y = 0.04;
+    g.add(this.blobShadow);
+
     this.group = g;
     this.bodyMats = [];
     g.traverse((o) => {
-      if (o.material && o !== this.aura && o !== this.iceShell && o !== this.label) {
+      if (o.material && o !== this.aura && o !== this.iceShell && o !== this.label && o !== this.blobShadow) {
         this.bodyMats.push(o.material);
+        if (RUNTIME.shadows && o.isMesh) o.castShadow = true;
       }
     });
   }
@@ -304,6 +322,13 @@ export class Character {
     const bob = flying ? 0 : Math.abs(Math.sin(this.phase)) * 0.08 * this.moveAmount;
     this.group.position.set(this.pos.x, this.altitude + bob, this.pos.z);
     this.group.rotation.y = this.yaw;
+
+    // blob shadow stays pinned to the ground, fading with height
+    const lift = this.altitude + bob;
+    this.blobShadow.position.y = -lift / Math.max(0.001, this.curScale) + 0.04;
+    const fade = 1 / (1 + lift * 0.25);
+    this.blobShadow.material.opacity = 0.3 * fade;
+    this.blobShadow.scale.setScalar(Math.max(0.4, fade));
 
     this.aura.rotation.z = time * 1.5;
     const pulse = 0.9 + Math.sin(time * 5 + this.phase) * 0.12;

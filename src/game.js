@@ -9,7 +9,7 @@ import { Director } from './rtp.js';
 import { Controls } from './controls.js';
 import { UI } from './ui.js';
 import { SFX } from './audio.js';
-import { rand, randInt, pick, clamp, botName, formatMoney, weightedPick } from './utils.js';
+import { rand, randInt, pick, clamp, botName, formatMoney, weightedPick, RUNTIME } from './utils.js';
 
 const now = () => performance.now() / 1000;
 const TK_COLOR = 0xc07bff;
@@ -20,6 +20,15 @@ export class Game {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.06;
+
+    // real-time sun shadows on desktop; mobile keeps cheap blob shadows only
+    RUNTIME.shadows = window.matchMedia('(pointer: fine)').matches && !('ontouchstart' in window);
+    if (RUNTIME.shadows) {
+      this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    }
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(68, 1, 0.1, 600);

@@ -1,3 +1,4 @@
+import '@fontsource/bangers';
 import { Game } from './game.js';
 
 const canvas = document.getElementById('gl');

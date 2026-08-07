@@ -1,3 +1,6 @@
+// mutable runtime capabilities, decided once at boot (game.js)
+export const RUNTIME = { shadows: false };
+
 export const rand = (a = 1, b) => (b === undefined ? Math.random() * a : a + Math.random() * (b - a));
 export const randInt = (a, b) => Math.floor(rand(a, b + 1));
 export const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
