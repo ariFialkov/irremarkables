@@ -64,7 +64,7 @@ export class Collectibles {
   }
 
   placeToken(t) {
-    const p = this.world.randomOpenPos(0.8);
+    const p = this.world.randomOpenPos(this.world.focus, 8, 95);
     t.x = p.x; t.z = p.z;
     t.active = true;
   }
@@ -74,7 +74,7 @@ export class Collectibles {
     const def = weightedPick(defs, (d) => d.p);
     const color = kind === 'pill' ? PILL_COLORS[def.id] : POTION_COLORS[def.id];
     const mesh = kind === 'pill' ? makePillMesh(color) : makePotionMesh(color);
-    const p = this.world.randomOpenPos(1);
+    const p = this.world.randomOpenPos(this.world.focus, 12, 95);
     mesh.position.set(p.x, 1, p.z);
     // soft glow disc under the item
     const glow = new THREE.Mesh(
@@ -89,9 +89,11 @@ export class Collectibles {
   }
 
   update(dt, time) {
-    // tokens: spin + bob, handle respawns
+    const f = this.world.focus;
+    // tokens: spin + bob, handle respawns; far-drifted tokens hop back nearby
     for (let i = 0; i < this.tokens.length; i++) {
       const t = this.tokens[i];
+      if (t.active && Math.hypot(t.x - f.x, t.z - f.z) > CONFIG.RECYCLE_DIST) this.placeToken(t);
       if (!t.active) {
         t.respawn -= dt;
         if (t.respawn <= 0) this.placeToken(t);
@@ -121,6 +123,11 @@ export class Collectibles {
           this.spawnItem(it.kind);
         }
         continue;
+      }
+      if (Math.hypot(it.x - f.x, it.z - f.z) > CONFIG.RECYCLE_DIST + 10) {
+        const p = this.world.randomOpenPos(f, 15, 95);
+        it.x = p.x; it.z = p.z;
+        it.mesh.position.x = p.x; it.mesh.position.z = p.z;
       }
       it.mesh.rotation.y = time * 1.4 + it.bobPhase;
       it.mesh.position.y = 1 + Math.sin(time * 2 + it.bobPhase) * 0.18;

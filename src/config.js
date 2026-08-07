@@ -35,14 +35,19 @@ export const CONFIG = {
   BOT_ATTACK_RANGE: 2.6,
   NEMESIS_SPEED: 11.5,
 
-  // ---- World ----
-  WORLD_SIZE: 340,         // playable square edge length
+  // ---- World (streamed chunks; biomes blend spatially via a drifting noise field) ----
   BLOCK: 22,               // city block size
   ROAD: 8,                 // road width
-  WORLD_SHIFT_SECONDS: [55, 90],  // random interval between world regenerations
-  TOKEN_COUNT: 170,
+  CHUNK_RADIUS: 5,         // chunks kept alive around the focus (Chebyshev)
+  RECYCLE_DIST: 135,       // tokens/items/bots beyond this hop back near the player
+  TOKEN_COUNT: 150,
   PILL_COUNT: 6,
   POTION_COUNT: 6,
+
+  // ---- Telekinesis ----
+  TK_RANGE: 13,            // grab reach
+  TK_PULL_SPEED: 8,        // reel-in speed (m/s)
+  TK_THROW_SPEED: 27,      // fling speed (m/s)
 
   // Pill spawn probabilities (must sum to 1)
   PILLS: [

@@ -8,13 +8,14 @@ export class Controls {
     this.enabled = false;
     this.isTouch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 
-    this.moveX = 0;          // strafe  (-1..1)
+    this.moveX = 0;          // strafe  (-1..1) — joystick only
     this.moveZ = 0;          // forward (-1..1)
     this.lookDelta = 0;      // accumulated yaw drag (consumed each frame)
     this.pitchDelta = 0;
 
     this.onAttack = null;
-    this.onPower = null;
+    this.onPowerDown = null;
+    this.onPowerUp = null;
     this.onSwitch = null;
 
     this.keys = new Set();
@@ -35,11 +36,14 @@ export class Controls {
       if (e.repeat) return;
       this.keys.add(e.code);
       if (e.code === 'KeyM') this.onAttack?.();
-      if (e.code === 'Space') { e.preventDefault(); this.onPower?.(); }
+      if (e.code === 'Space') { e.preventDefault(); this.onPowerDown?.(); }
       if (e.code === 'Tab') this.onSwitch?.();
     });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(e.code);
+      if (e.code === 'Space' && this.enabled) this.onPowerUp?.();
+    });
+    window.addEventListener('blur', () => { this.keys.clear(); this.onPowerUp?.(); });
 
     const onDown = (e) => {
       if (!this.enabled) return;
@@ -93,15 +97,23 @@ export class Controls {
     window.addEventListener('pointercancel', onUp);
 
     // Static action buttons (mobile)
-    const hook = (id, fn) => {
-      const el = document.getElementById(id);
-      el.addEventListener('pointerdown', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        if (this.enabled) fn();
-      });
+    const attackEl = document.getElementById('attack-btn');
+    attackEl.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (this.enabled) this.onAttack?.();
+    });
+    const powerEl = document.getElementById('poweruse-btn');
+    powerEl.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (this.enabled) this.onPowerDown?.();
+    });
+    const powerRelease = (e) => {
+      e.preventDefault();
+      if (this.enabled) this.onPowerUp?.();
     };
-    hook('attack-btn', () => this.onAttack?.());
-    hook('poweruse-btn', () => this.onPower?.());
+    powerEl.addEventListener('pointerup', powerRelease);
+    powerEl.addEventListener('pointercancel', powerRelease);
+    powerEl.addEventListener('pointerleave', powerRelease);
   }
 
   showJoystick(ox, oy, dx, dy) {
@@ -115,25 +127,27 @@ export class Controls {
     this.knobEl.style.top = (oy + dy) + 'px';
   }
 
-  // Keyboard movement folded in each frame.
+  // Keyboard state folded in each frame. Desktop: W/S move, A/D turn.
   poll() {
+    let turn = 0;
     if (!this.isTouch || this.joyPointer === null) {
-      let x = 0, z = 0;
-      if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) x -= 1;
-      if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) x += 1;
+      let z = 0;
       if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) z += 1;
       if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) z -= 1;
-      if (!this.isTouch || x || z) {
-        const len = Math.hypot(x, z) || 1;
-        this.moveX = x / len;
-        this.moveZ = z / len;
+      if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) turn -= 1;
+      if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) turn += 1;
+      if (!this.isTouch) {
+        this.moveX = 0;
+        this.moveZ = z;
+      } else if (z) {
+        this.moveZ = z;
       }
     }
     const look = this.lookDelta;
     const pitch = this.pitchDelta;
     this.lookDelta = 0;
     this.pitchDelta = 0;
-    return { moveX: this.moveX, moveZ: this.moveZ, look, pitch };
+    return { moveX: this.moveX, moveZ: this.moveZ, turn, look, pitch };
   }
 
   setEnabled(on) {

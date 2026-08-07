@@ -19,8 +19,8 @@ export const POWERS = [
   },
   {
     id: 'telekinesis', name: 'Telekinesis', emblem: '\u{1F52E}', color: 0xc07bff, rare: false,
-    desc: 'Seize nearby enemies with your mind, lift them high, and slam them down.',
-    cooldown: 8, counter: 'teleport',
+    desc: 'HOLD to seize the nearest enemy or object, reel it in, and hurl it where you aim. Release early to drop it.',
+    cooldown: 6, counter: 'teleport',
   },
   {
     id: 'pyro', name: 'Pyrokinesis', emblem: '\u{1F525}', color: 0xff7a3c, rare: true,

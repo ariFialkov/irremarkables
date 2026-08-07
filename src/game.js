@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
-import { POWERS, powerById, counterPowerFor } from './powers.js';
+import { POWERS, counterPowerFor } from './powers.js';
 import { World } from './world.js';
 import { FX } from './fx.js';
 import { Collectibles } from './collectibles.js';
-import { Character } from './entities.js';
+import { Character, PLAYER_COSTUME } from './entities.js';
 import { Director } from './rtp.js';
 import { Controls } from './controls.js';
 import { UI } from './ui.js';
@@ -12,6 +12,7 @@ import { SFX } from './audio.js';
 import { rand, randInt, pick, clamp, botName, formatMoney, weightedPick } from './utils.js';
 
 const now = () => performance.now() / 1000;
+const TK_COLOR = 0xc07bff;
 
 export class Game {
   constructor(canvas) {
@@ -40,9 +41,11 @@ export class Game {
 
     this.bots = [];
     this.clones = [];
+    this.thrown = [];          // telekinetically flung bodies & props
     this.pendingRespawns = [];
     this.player = null;
     this.nemesis = null;
+    this.nemesisRetry = 0;
 
     // camera state
     this.camYaw = 0;
@@ -54,12 +57,10 @@ export class Game {
     this.deathT = 0;
 
     this.lbTimer = 0;
-    this.shiftTimer = rand(...CONFIG.WORLD_SHIFT_SECONDS);
 
     this._v1 = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
 
-    this.world.regenerate();
     this.collectibles.respawnAll();
     for (let i = 0; i < CONFIG.BOT_COUNT; i++) this.spawnBot({ initial: true });
 
@@ -68,7 +69,8 @@ export class Game {
     this.ui.onSwitchOpen = () => this.openSwitch();
     this.ui.onSwitchPick = (p) => this.doSwitch(p);
     this.controls.onAttack = () => this.playerAttack();
-    this.controls.onPower = () => this.usePower();
+    this.controls.onPowerDown = () => this.powerDown();
+    this.controls.onPowerUp = () => this.powerUp();
     this.controls.onSwitch = () => this.openSwitch();
 
     this.ui.showMenu(this.wallet);
@@ -83,6 +85,12 @@ export class Game {
     this.camera.updateProjectionMatrix();
   }
 
+  get focusPos() {
+    if (this.player && (this.state === 'playing' || this.state === 'dying')) return this.player.ch.pos;
+    if (this.attractBot?.ch.alive) return this.attractBot.ch.pos;
+    return this.world.focus;
+  }
+
   // ================= BOTS =================
 
   spawnBot({ initial = false, pos = null } = {}) {
@@ -92,21 +100,16 @@ export class Game {
     let p = pos;
     if (!p && !initial && this.player && this.state === 'playing' && Math.random() < 0.65) {
       // bias replacements toward the player so the lobby stays lively nearby
-      for (let i = 0; i < 20 && !p; i++) {
-        const ang = rand(0, Math.PI * 2), r = rand(25, 65);
-        const x = this.player.ch.pos.x + Math.cos(ang) * r;
-        const z = this.player.ch.pos.z + Math.sin(ang) * r;
-        if (!this.world.isBlocked(x, z, 1)) p = { x, z };
-      }
+      p = this.world.randomOpenPos(this.player.ch.pos, 25, 65);
     }
-    p = p || this.world.randomOpenPos();
+    p = p || this.world.randomOpenPos(this.focusPos, 15, 90);
     ch.pos.set(p.x, 0, p.z);
     ch.yaw = rand(0, Math.PI * 2);
     const bot = {
       ch, power,
       state: 'roam',
       target: null,
-      wander: this.world.randomOpenPos(),
+      wander: this.world.randomOpenPos(p, 8, 40),
       repath: rand(0.5, 3),
       attackCd: 0,
       quirkCd: rand(2, 8),
@@ -114,37 +117,26 @@ export class Game {
       score: initial ? rand(0.2, 8) * 10 : rand(0.5, 3),
       isNemesis: false,
       hp: 100,
-      tkState: null,
+      held: false,
     };
     this.bots.push(bot);
     return bot;
   }
 
-  botsAndClones() { return this.bots.concat(this.clones); }
-
   updateBot(b, dt) {
     const ch = b.ch;
     if (!ch.alive) return;
+    if (b.held) { ch.update(dt, this.time); return; }  // telekinesis has them
     ch.update(dt, this.time);
     if (ch.frozen) { ch.vel.set(0, 0, 0); return; }
 
-    // telekinesis lift overrides everything
-    if (b.tkState) {
-      const tk = b.tkState;
-      tk.t += dt;
-      if (tk.t < 1.1) {
-        ch.altitude = Math.min(7, ch.altitude + dt * 8);
-        ch.yaw += dt * 9;
-      } else {
-        ch.altitude = 0;
-        this.fx.ring(ch.pos.x, ch.pos.z, { color: 0xc07bff, maxR: 4, dur: 0.4 });
-        this.fx.emit(ch.pos.x, 1, ch.pos.z, { count: 26, color: 0xc07bff, speed: 8, life: 0.6, size: 1.8 });
-        SFX.slam();
-        this.fx.addShake(0.5);
-        b.tkState = null;
-        this.killBot(b, { byPlayer: tk.byPlayer, cause: 'telekinesis' });
-      }
-      return;
+    // keep the lobby near the action: far-drifted bots quietly re-enter nearby
+    const f = this.focusPos;
+    if (!b.isNemesis && Math.hypot(ch.pos.x - f.x, ch.pos.z - f.z) > CONFIG.RECYCLE_DIST + 20) {
+      const p = this.world.randomOpenPos(f, 55, 100);
+      ch.pos.set(p.x, 0, p.z);
+      b.target = null;
+      b.wander = this.world.randomOpenPos(f, 15, 60);
     }
 
     b.repath -= dt;
@@ -157,10 +149,9 @@ export class Game {
     if (b.repath <= 0 && !b.isNemesis) {
       b.repath = rand(1.2, 3);
       b.target = null;
-      // find someone to pick on
       let best = null, bestD = 24;
       for (const other of this.bots) {
-        if (other === b || !other.ch.alive || other.ch.frozen) continue;
+        if (other === b || !other.ch.alive || other.ch.frozen || other.held) continue;
         const d = ch.pos.distanceTo(other.ch.pos);
         if (d < bestD) { best = other; bestD = d; }
       }
@@ -169,19 +160,17 @@ export class Game {
         if (dP < 15 && dP < bestD) { b.target = 'player'; }
       }
       if (!b.target && best && Math.random() < 0.55) b.target = best;
-      if (!b.target && Math.random() < 0.6) b.wander = this.world.randomOpenPos();
+      if (!b.target && Math.random() < 0.6) b.wander = this.world.randomOpenPos(ch.pos, 10, 45);
     }
 
-    // nemesis always hunts the player
     if (b.isNemesis) b.target = 'player';
 
-    // resolve destination
     let dest = b.wander, chasing = false;
     if (b.target === 'player') {
       if (!this.player || !this.player.ch.alive || (!b.isNemesis && !playerTargetable)) b.target = null;
       else { dest = this.player.ch.pos; chasing = true; }
     } else if (b.target) {
-      if (!b.target.ch.alive || b.target.ch.frozen) b.target = null;
+      if (!b.target.ch.alive || b.target.ch.frozen || b.target.held) b.target = null;
       else { dest = b.target.ch.pos; chasing = true; }
     }
 
@@ -204,6 +193,9 @@ export class Game {
           this.fx.emit(nx, 1.2, nz, { count: 14, color: 0x7dffca, speed: 5, life: 0.4 });
         }
       } else if (id === 'invisibility') { b.fadeUntil = now() + 2.5; }
+      else if (id === 'telekinesis') {
+        this.fx.emit(ch.pos.x, 1.6, ch.pos.z, { count: 10, color: TK_COLOR, speed: 2.5, life: 0.7, gravity: 1 });
+      }
     }
     if (b.speedBurst && now() < b.speedBurst) {
       speed *= 2.1;
@@ -232,7 +224,6 @@ export class Game {
         this.fx.emit(ch.pos.x, 1.2, ch.pos.z, { count: 20, color: 0xff2038, speed: 6, life: 0.5 });
         SFX.teleport();
       }
-      // menacing trail
       if (Math.random() < 0.5) {
         this.fx.emit(ch.pos.x, rand(0.4, 2), ch.pos.z, { count: 1, color: 0xff2038, speed: 1.2, life: 0.5, size: 1.6, gravity: 1 });
       }
@@ -252,7 +243,7 @@ export class Game {
       if (ch.altitude < 3) this.world.resolve(ch.pos, 0.55, ch.altitude);
     } else {
       ch.vel.set(0, 0, 0);
-      if (!chasing && b.repath > 1) b.wander = this.world.randomOpenPos();
+      if (!chasing && b.repath > 1) b.wander = this.world.randomOpenPos(ch.pos, 10, 45);
     }
 
     // attack
@@ -278,12 +269,12 @@ export class Game {
       const col = b.power.color;
       if (cause === 'shatter') { this.fx.emit(px, py, pz, { count: 34, color: 0x9df2ff, speed: 9, life: 0.8, size: 1.7 }); SFX.shatter(); }
       else if (cause === 'fire') { this.fx.emit(px, py, pz, { count: 30, color: 0xff7a3c, speed: 7, life: 0.7, size: 2.2, gravity: 3 }); }
+      else if (cause === 'slam') { this.fx.emit(px, py, pz, { count: 30, color: TK_COLOR, speed: 9, life: 0.8, size: 1.9 }); SFX.slam(); }
       else { this.fx.emit(px, py, pz, { count: 24, color: col, speed: 8, life: 0.7, size: 1.8 }); }
       this.fx.ring(px, pz, { color: col, maxR: 3, dur: 0.4 });
       SFX.kill();
     }
 
-    // bounty
     if (byPlayer && this.player) {
       const bounty = this.director.bet * rand(CONFIG.KILL_VALUE_MIN, CONFIG.KILL_VALUE_MAX) *
         (1 + Math.min(2, b.score / 200));
@@ -296,7 +287,6 @@ export class Game {
       }
       SFX.coin();
       this.ui.killfeed(`<b>You</b> ⚡ eliminated <b>${b.ch.name}</b>`, true);
-      // power absorption pill
       if (this.player.absorbUntil > now() && b.power.id !== this.playerMainPower().id) {
         this.setPlayerPower(b.power);
         this.ui.announce(`ABSORBED ${b.power.name.toUpperCase()}`, { dur: 1800 });
@@ -309,9 +299,12 @@ export class Game {
       }
     }
 
-    if (b.isNemesis) this.nemesis = null;
+    if (b.isNemesis) {
+      this.nemesis = null;
+      this.nemesisRetry = rand(2.5, 4.5);   // the director sends another hunter
+      if (byPlayer) this.ui.announce('NEMESIS DOWN — BUT THEY KNOW WHERE YOU ARE', { danger: true, dur: 2400 });
+    }
 
-    // remove & schedule a replacement "player" joining the lobby
     const idx = this.bots.indexOf(b);
     if (idx >= 0) this.bots.splice(idx, 1);
     b.ch.dispose();
@@ -329,7 +322,7 @@ export class Game {
     if (this.player) this.player.ch.dispose();
     const ch = new Character(this.scene, { name: 'YOU', isPlayer: true });
     ch.setPower(power);
-    const p = this.world.randomOpenPos(2);
+    const p = this.world.randomOpenPos(this.focusPos, 5, 40);
     ch.pos.set(p.x, 0, p.z);
     this.player = {
       ch, powerMain: power, secondPower: null,
@@ -341,11 +334,13 @@ export class Game {
       invulnUntil: now() + 2, adrenalineReady: now(),
       kills: 0, tokens: 0,
       prevAlt: 0,
+      tk: null,
     };
     ch.hp = CONFIG.PLAYER_HP;
 
     this.state = 'playing';
     this.nemesis = null;
+    this.nemesisRetry = 0;
     this.camYaw = ch.yaw + Math.PI;
     this.ui.showHUD(this.controls.isTouch);
     this.ui.setSwitches(this.player.switchesLeft);
@@ -368,8 +363,8 @@ export class Game {
   setPlayerPower(power) {
     this.player.powerMain = power;
     this.player.ch.setPower(power);
-    // leaving flight mid-air: glide down handled by update
     if (power.id !== 'flight') this.player.flying = false;
+    if (power.id !== 'telekinesis') this.cancelTelekinesis(true);
   }
 
   openSwitch() {
@@ -407,7 +402,7 @@ export class Game {
     let hitAny = false;
 
     for (const b of [...this.bots]) {
-      if (!b.ch.alive) continue;
+      if (!b.ch.alive || b.held) continue;
       const dx = b.ch.pos.x - ch.pos.x, dz = b.ch.pos.z - ch.pos.z;
       const d = Math.hypot(dx, dz);
       if (d > range + 0.6) continue;
@@ -429,7 +424,6 @@ export class Game {
       this.fx.addShake(0.15);
       if (b.hp <= 0) this.killBot(b, { byPlayer: true });
       else {
-        // knockback + retaliation chance
         const k = 1.1 / (d || 1);
         b.ch.pos.x += dx * k; b.ch.pos.z += dz * k;
         if (Math.random() < 0.5) { b.target = 'player'; b.aggressive = true; }
@@ -460,10 +454,9 @@ export class Game {
       const hitWall = this.world.isBlocked(pr.pos.x, pr.pos.z, 0.5) && this.world.buildingHeightAt(pr.pos.x, pr.pos.z) > pr.pos.y;
       let hitBot = false;
       for (const b of this.bots) {
-        if (b.ch.alive && b.ch.pos.distanceTo(pr.pos) < 1.6) { hitBot = true; break; }
+        if (b.ch.alive && !b.held && b.ch.pos.distanceTo(pr.pos) < 1.6) { hitBot = true; break; }
       }
       if (pr.life <= 0 || hitWall || hitBot) {
-        // explode
         SFX.explosion();
         this.fx.addShake(0.8);
         this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 60, color: 0xff7a3c, speed: 14, life: 0.9, size: 3, gravity: -2 });
@@ -479,12 +472,20 @@ export class Game {
 
   // ================= POWERS =================
 
-  usePower() {
+  powerDown() {
     if (this.state !== 'playing' || !this.player?.ch.alive) return;
     const P = this.player;
     const powers = [P.powerMain];
     if (P.twoUntil > now() && P.secondPower) powers.push(P.secondPower);
-    for (const pw of powers) this.activatePower(pw);
+    for (const pw of powers) {
+      if (pw.id === 'telekinesis') this.startTelekinesis(pw);
+      else this.activatePower(pw);
+    }
+  }
+
+  powerUp() {
+    if (!this.player) return;
+    if (this.player.tk && this.player.tk.phase !== 'thrown') this.releaseTelekinesis();
   }
 
   activatePower(power) {
@@ -515,23 +516,7 @@ export class Game {
         P.invisUntil = t + 5;
         SFX.invis();
         this.fx.emit(px, py, pz, { count: 24, color: 0xbfc7de, speed: 4, life: 0.6, size: 1.6 });
-        // stalkers lose you
         for (const b of this.bots) if (b.target === 'player' && !b.isNemesis) b.target = null;
-        break;
-      }
-      case 'telekinesis': {
-        const victims = this.bots
-          .filter((b) => b.ch.alive && !b.tkState && b.ch.pos.distanceTo(ch.pos) < 11)
-          .sort((a, b2) => a.ch.pos.distanceTo(ch.pos) - b2.ch.pos.distanceTo(ch.pos))
-          .slice(0, 3);
-        if (!victims.length) { used = false; break; }
-        SFX.tk();
-        this.fx.ring(px, pz, { color: 0xc07bff, maxR: 11, dur: 0.7 });
-        for (const v of victims) {
-          v.tkState = { t: 0, byPlayer: true };
-          this.fx.emit(v.ch.pos.x, 1.4, v.ch.pos.z, { count: 16, color: 0xc07bff, speed: 3, life: 1.1, gravity: 3 });
-        }
-        this.fx.addShake(0.25);
         break;
       }
       case 'pyro': {
@@ -545,7 +530,7 @@ export class Game {
         this.fx.emit(px, 0.6, pz, { count: 70, color: 0x9df2ff, speed: 11, life: 0.9, size: 1.8, gravity: -1, spread: 1.2 });
         this.fx.addShake(0.3);
         for (const b of this.bots) {
-          if (b.ch.alive && b.ch.pos.distanceTo(ch.pos) < 10 && Math.abs(b.ch.altitude - ch.altitude) < 4) {
+          if (b.ch.alive && !b.held && b.ch.pos.distanceTo(ch.pos) < 10 && Math.abs(b.ch.altitude - ch.altitude) < 4) {
             b.ch.freeze(4.5);
             b.ch.vel.set(0, 0, 0);
           }
@@ -566,7 +551,6 @@ export class Game {
         ch.pos.set(nx, 0, nz);
         this.fx.emit(nx, py, nz, { count: 26, color: 0x7dffca, speed: 6, life: 0.5, size: 1.8 });
         this.fx.ring(nx, nz, { color: 0x7dffca, maxR: 4, dur: 0.45 });
-        // superhero-landing potion triggers on arrival
         if (P.landingUntil > t) this.superheroLanding();
         break;
       }
@@ -583,7 +567,6 @@ export class Game {
         SFX.morph();
         this.fx.emit(px, py, pz, { count: 30, color: 0xff9de2, speed: 5, life: 0.7, size: 1.8 });
         ch.setOpacity(1);
-        // look like a bot: hide the cape, dull the suit
         if (ch.cape) ch.cape.visible = false;
         ch.torso.material.color.set(0x555a60);
         ch.armL.material.color.set(0x555a60);
@@ -594,7 +577,7 @@ export class Game {
       case 'duplication': {
         SFX.dupe();
         for (let i = 0; i < 2; i++) {
-          const cch = new Character(this.scene, { name: 'YOU', outfit: 0x27406e });
+          const cch = new Character(this.scene, { name: 'YOU', costume: PLAYER_COSTUME });
           cch.setPower(P.powerMain);
           cch.pos.set(px + rand(-2, 2), 0, pz + rand(-2, 2));
           this.fx.emit(cch.pos.x, 1.2, cch.pos.z, { count: 20, color: 0xffb27d, speed: 5, life: 0.6 });
@@ -610,13 +593,217 @@ export class Game {
     if (used) P.cds[power.id] = t + power.cooldown;
   }
 
+  // ---------------- telekinesis (hold to channel) ----------------
+
+  startTelekinesis(power) {
+    const P = this.player;
+    const t = now();
+    if (P.tk || (P.cds[power.id] || 0) > t) return;
+    const ch = P.ch;
+
+    // nearest bot or liftable prop in range
+    let kind = null, bot = null, prop = null, bestD = CONFIG.TK_RANGE;
+    for (const b of this.bots) {
+      if (!b.ch.alive || b.held || b.ch.frozen) continue;
+      if (b.isNemesis) continue;                       // the nemesis resists
+      const d = b.ch.pos.distanceTo(ch.pos);
+      if (d < bestD) { bot = b; bestD = d; kind = 'bot'; }
+    }
+    for (const { l, d } of this.world.liftablesNear(ch.pos, CONFIG.TK_RANGE)) {
+      if (d < bestD) { prop = l; bot = null; bestD = d; kind = 'prop'; }
+    }
+
+    if (!kind) {
+      // fizzle — nothing to grab
+      this.fx.emit(ch.pos.x, 1.6, ch.pos.z, { count: 8, color: TK_COLOR, speed: 2, life: 0.4 });
+      if (this.nemesis && this.nemesis.ch.pos.distanceTo(ch.pos) < CONFIG.TK_RANGE) {
+        this.ui.announce('THEY RESIST YOUR GRIP', { danger: true, dur: 1400 });
+      }
+      return;
+    }
+
+    P.tk = { kind, bot, prop, phase: 'lift', y: 0, auraT: 0 };
+    if (bot) { bot.held = true; bot.ch.vel.set(0, 0, 0); }
+    if (prop) { prop.busy = true; prop.baseRot = prop.mesh.rotation.y; }
+    SFX.tk();
+    const pos = kind === 'bot' ? bot.ch.pos : prop.mesh.position;
+    this.fx.ring(pos.x, pos.z, { color: TK_COLOR, maxR: 3.5, dur: 0.5 });
+  }
+
+  tkTargetPos(tk) {
+    if (tk.kind === 'bot') {
+      const c = tk.bot.ch;
+      return { x: c.pos.x, y: c.altitude, z: c.pos.z };
+    }
+    const m = tk.prop.mesh.position;
+    return { x: m.x, y: m.y, z: m.z };
+  }
+
+  tkSetPos(tk, x, y, z) {
+    if (tk.kind === 'bot') {
+      tk.bot.ch.pos.x = x; tk.bot.ch.pos.z = z;
+      tk.bot.ch.altitude = y;
+    } else {
+      tk.prop.mesh.position.set(x, y, z);
+    }
+  }
+
+  updateTelekinesis(dt) {
+    const P = this.player;
+    const tk = P?.tk;
+    if (!tk) return;
+
+    // target died / vanished mid-channel
+    if ((tk.kind === 'bot' && !tk.bot.ch.alive) || (tk.kind === 'prop' && !tk.prop.alive)) {
+      P.tk = null;
+      P.cds['telekinesis'] = now() + 1.5;
+      return;
+    }
+
+    const ch = P.ch;
+    const pos = this.tkTargetPos(tk);
+
+    // purple channel aura
+    tk.auraT += dt;
+    this.fx.emit(pos.x, pos.y + 1.2, pos.z, { count: 2, color: TK_COLOR, speed: 1.6, life: 0.45, size: 1.5, gravity: 2, jitter: 0.7 });
+    if (tk.auraT > 0.3) {
+      tk.auraT = 0;
+      this.fx.ring(pos.x, pos.z, { color: TK_COLOR, maxR: 2.2, dur: 0.4 });
+    }
+
+    // spin the victim slowly while held
+    if (tk.kind === 'bot') tk.bot.ch.yaw += dt * 5;
+    else tk.prop.mesh.rotation.y = tk.prop.baseRot + (tk.prop.mesh.rotation.y - tk.prop.baseRot) + dt * 3;
+
+    const LIFT_H = 3.0;
+    if (tk.phase === 'lift') {
+      const ny = Math.min(LIFT_H, pos.y + dt * 6);
+      this.tkSetPos(tk, pos.x, ny, pos.z);
+      if (ny >= LIFT_H - 0.01) tk.phase = 'pull';
+    } else if (tk.phase === 'pull') {
+      const dx = ch.pos.x - pos.x, dz = ch.pos.z - pos.z;
+      const d = Math.hypot(dx, dz);
+      const bobY = LIFT_H + Math.sin(this.time * 5) * 0.25;
+      if (d > 3.6) {
+        const step = CONFIG.TK_PULL_SPEED * dt;
+        this.tkSetPos(tk, pos.x + (dx / d) * step, bobY, pos.z + (dz / d) * step);
+      } else {
+        // in range — hurl it where the player is aiming (camera direction)
+        const aim = this.camYaw;
+        ch.yaw = aim;
+        const vel = new THREE.Vector3(Math.sin(aim) * CONFIG.TK_THROW_SPEED, 1.5, Math.cos(aim) * CONFIG.TK_THROW_SPEED);
+        this.thrown.push({ kind: tk.kind, bot: tk.bot, prop: tk.prop, vel, mode: 'throw', spin: rand(3, 7) });
+        P.cds['telekinesis'] = now() + this.playerMainPower().cooldown;
+        P.tk = null;
+        SFX.whoosh();
+        this.fx.addShake(0.35);
+        this.fx.emit(pos.x, bobY + 1, pos.z, { count: 20, color: TK_COLOR, speed: 6, life: 0.5, size: 1.8 });
+      }
+    }
+  }
+
+  releaseTelekinesis() {
+    const P = this.player;
+    const tk = P?.tk;
+    if (!tk) return;
+    // dropped early: the grip just cuts out and gravity takes over
+    this.thrown.push({ kind: tk.kind, bot: tk.bot, prop: tk.prop, vel: new THREE.Vector3(0, 0, 0), mode: 'drop', spin: 0 });
+    P.cds['telekinesis'] = now() + 1.5;
+    P.tk = null;
+    SFX.invis();
+  }
+
+  cancelTelekinesis(silent = false) {
+    const P = this.player;
+    if (!P?.tk) return;
+    if (silent) {
+      const tk = P.tk;
+      if (tk.kind === 'bot' && tk.bot.ch.alive) { tk.bot.held = false; tk.bot.ch.altitude = 0; }
+      if (tk.kind === 'prop' && tk.prop.alive) { tk.prop.busy = false; tk.prop.mesh.position.y = 0; }
+      P.tk = null;
+    } else {
+      this.releaseTelekinesis();
+    }
+  }
+
+  updateThrown(dt) {
+    for (let i = this.thrown.length - 1; i >= 0; i--) {
+      const th = this.thrown[i];
+      const alive = th.kind === 'bot' ? th.bot.ch.alive : th.prop.alive;
+      if (!alive) { this.thrown.splice(i, 1); continue; }
+
+      const pos = th.kind === 'bot'
+        ? { x: th.bot.ch.pos.x, y: th.bot.ch.altitude, z: th.bot.ch.pos.z }
+        : th.prop.mesh.position;
+
+      th.vel.y -= 26 * dt;
+      const nx = pos.x + th.vel.x * dt;
+      const ny = pos.y + th.vel.y * dt;
+      const nz = pos.z + th.vel.z * dt;
+      if (th.kind === 'bot') {
+        th.bot.ch.pos.x = nx; th.bot.ch.pos.z = nz;
+        th.bot.ch.altitude = Math.max(0, ny);
+        th.bot.ch.yaw += th.spin * dt;
+      } else {
+        th.prop.mesh.position.set(nx, Math.max(0, ny), nz);
+        th.prop.mesh.rotation.x += th.spin * dt * 0.5;
+      }
+
+      if (th.mode === 'throw') {
+        // trailing sparkle
+        this.fx.emit(nx, Math.max(0.5, ny) + 1, nz, { count: 2, color: TK_COLOR, speed: 1.5, life: 0.35, size: 1.4 });
+        // mow down anyone in the flight path
+        for (const other of [...this.bots]) {
+          if (!other.ch.alive || other.held) continue;
+          if (th.kind === 'bot' && other === th.bot) continue;
+          const dd = Math.hypot(other.ch.pos.x - nx, other.ch.pos.z - nz);
+          const hitR = th.kind === 'prop' ? 2.3 : 1.9;
+          if (dd < hitR && Math.abs(other.ch.altitude - ny) < 3.2) {
+            this.killBot(other, { byPlayer: true, cause: 'slam' });
+          }
+        }
+      }
+
+      const hitWall = this.world.isBlocked(nx, nz, 0.4) && this.world.buildingHeightAt(nx, nz) > ny;
+      const hitGround = ny <= 0.15;
+
+      if (hitWall || hitGround) {
+        if (th.mode === 'throw') {
+          this.fx.ring(nx, nz, { color: TK_COLOR, maxR: 4.5, dur: 0.5 });
+          this.fx.addShake(0.4);
+          if (th.kind === 'bot') {
+            th.bot.held = false;
+            this.killBot(th.bot, { byPlayer: true, cause: 'slam' });
+          } else {
+            SFX.slam();
+            this.fx.emit(nx, Math.max(0.5, ny), nz, { count: 30, color: 0x9aa0a8, speed: 8, life: 0.7, size: 1.8 });
+            this.world.removeLiftable(th.prop);
+          }
+        } else {
+          // soft drop: it just lands where the grip failed
+          if (th.kind === 'bot') {
+            th.bot.held = false;
+            th.bot.ch.altitude = 0;
+            th.bot.repath = 1.5;
+            this.fx.emit(nx, 0.6, nz, { count: 8, color: 0xffffff, speed: 3, life: 0.3, size: 1.1 });
+          } else {
+            th.prop.mesh.position.y = 0;
+            th.prop.mesh.rotation.x = 0;
+            th.prop.busy = false;
+          }
+        }
+        this.thrown.splice(i, 1);
+      }
+    }
+  }
+
   revealDisguise() {
     const P = this.player, ch = P.ch;
     P.disguiseUntil = 0;
     if (ch.cape) ch.cape.visible = true;
-    ch.torso.material.color.set(0x27406e);
-    ch.armL.material.color.set(0x27406e);
-    ch.armR.material.color.set(0x27406e);
+    ch.torso.material.color.set(ch.costume.primary);
+    ch.armL.material.color.set(ch.costume.primary);
+    ch.armR.material.color.set(ch.costume.primary);
     this.fx.emit(ch.pos.x, 1.4, ch.pos.z, { count: 18, color: 0xff9de2, speed: 5, life: 0.5 });
   }
 
@@ -707,10 +894,12 @@ export class Game {
   sendNemesis() {
     const power = counterPowerFor(this.player.powerMain.id);
     const p = this.player.ch.pos;
-    // spawn just off-camera behind a building line
     const ang = this.camYaw + rand(-0.9, 0.9);
     let sx = p.x - Math.sin(ang) * 30, sz = p.z - Math.cos(ang) * 30;
-    if (this.world.isBlocked(sx, sz)) { const o = this.world.randomOpenPos(); sx = o.x; sz = o.z; }
+    if (this.world.isBlocked(sx, sz)) {
+      const o = this.world.randomOpenPos(p, 20, 35);
+      sx = o.x; sz = o.z;
+    }
     const b = this.spawnBot({ pos: { x: sx, z: sz } });
     b.isNemesis = true;
     b.aggressive = true;
@@ -727,6 +916,7 @@ export class Game {
 
   playerDeath(killer) {
     const P = this.player;
+    this.cancelTelekinesis(true);
     P.ch.alive = false;
     this.state = 'dying';
     this.deathT = 0;
@@ -742,7 +932,6 @@ export class Game {
     const c = P.ch.pos;
     this.fx.emit(c.x, 1.4 + P.ch.altitude, c.z, { count: 50, color: killer ? killer.power.color : 0xff5470, speed: 9, life: 1.1, size: 2 });
     this.fx.ring(c.x, c.z, { color: 0xff2038, maxR: 7, dur: 0.8 });
-    // clear xray if active
     this.world.setXray(false);
     this.collectibles.setXray(false);
   }
@@ -769,8 +958,15 @@ export class Game {
   }
 
   backToMenu() {
+    this.cancelTelekinesis(true);
+    for (const th of this.thrown) {
+      if (th.kind === 'bot' && th.bot.ch.alive) { th.bot.held = false; th.bot.ch.altitude = 0; }
+      if (th.kind === 'prop' && th.prop.alive) { th.prop.busy = false; th.prop.mesh.position.y = 0; }
+    }
+    this.thrown = [];
     if (this.player) { this.player.ch.dispose(); this.player = null; }
     if (this.nemesis) { this.killBot(this.nemesis, { silent: true }); this.nemesis = null; }
+    this.nemesisRetry = 0;
     for (const c of this.clones) c.ch.dispose();
     this.clones = [];
     this.state = 'menu';
@@ -786,13 +982,13 @@ export class Game {
     if (!ch.alive) return;
     const t = now();
 
-    // camera-relative movement
+    // camera-relative movement: W/S along the view axis, joystick strafes
     const speedBoost = (P.speedUntil > t ? 2.4 : 1) * (P.enlargeUntil > t ? 1.2 : 1);
     const flySpeed = P.flying ? 1.35 : 1;
     const spd = CONFIG.PLAYER_SPEED * speedBoost * flySpeed;
     const sin = Math.sin(this.camYaw), cos = Math.cos(this.camYaw);
-    const mx = input.moveX * cos + input.moveZ * sin;
-    const mz = -input.moveX * sin + input.moveZ * cos;
+    const mx = -input.moveX * cos + input.moveZ * sin;
+    const mz = input.moveX * sin + input.moveZ * cos;
     const moving = Math.hypot(mx, mz) > 0.05;
 
     ch.vel.set(mx * spd, 0, mz * spd);
@@ -804,6 +1000,12 @@ export class Game {
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
       ch.yaw += dy * Math.min(1, dt * 10);
+    } else if (input.turn) {
+      // turning in place rotates the hero with the camera
+      let dy = this.camYaw - ch.yaw;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      ch.yaw += dy * Math.min(1, dt * 6);
     }
 
     // altitude / flight
@@ -837,7 +1039,7 @@ export class Game {
       this.fx.emitDir(ch.pos.x + fxd.x, 1.3 + ch.altitude, ch.pos.z + fxd.z, fxd,
         { count: 3, color: 0xffd166, speed: 13, life: 0.35, size: 2, cone: 0.18 });
       for (const b of [...this.bots]) {
-        if (!b.ch.alive) continue;
+        if (!b.ch.alive || b.held) continue;
         const dx = b.ch.pos.x - ch.pos.x, dz = b.ch.pos.z - ch.pos.z;
         const d = Math.hypot(dx, dz);
         if (d < 8.5 && (dx * fxd.x + dz * fxd.z) / (d || 1) > 0.72 && Math.abs(b.ch.altitude - ch.altitude) < 3) {
@@ -879,7 +1081,7 @@ export class Game {
     // giant crush: walking over bots while enlarged
     if (ch.curScale > 1.5) {
       for (const b of [...this.bots]) {
-        if (b.ch.alive && !b.isNemesis && b.ch.pos.distanceTo(ch.pos) < 1.9 * ch.curScale && b.ch.altitude < 2) {
+        if (b.ch.alive && !b.isNemesis && !b.held && b.ch.pos.distanceTo(ch.pos) < 1.9 * ch.curScale && b.ch.altitude < 2) {
           this.killBot(b, { byPlayer: true });
           this.fx.addShake(0.3);
         }
@@ -905,7 +1107,7 @@ export class Game {
         c.repath = 1;
         let best = null, bestD = 26;
         for (const b of this.bots) {
-          if (!b.ch.alive || b.isNemesis) continue;
+          if (!b.ch.alive || b.isNemesis || b.held) continue;
           const d = c.ch.pos.distanceTo(b.ch.pos);
           if (d < bestD) { best = b; bestD = d; }
         }
@@ -937,9 +1139,8 @@ export class Game {
 
   updateCameraPlay(dt, input) {
     const P = this.player, ch = P.ch;
-    this.camYaw -= input.look;
+    this.camYaw -= input.look + input.turn * 2.6 * dt;
     this.camPitch = clamp(this.camPitch + input.pitch, 0.12, 1.1);
-    // gently swing behind movement direction when not manually looking
     const scale = ch.curScale;
     const dist = (8.5 + ch.altitude * 0.35) * (0.75 + scale * 0.35);
     const h = (3.2 + Math.sin(this.camPitch) * 6) * (0.7 + scale * 0.3);
@@ -947,18 +1148,26 @@ export class Game {
     const tx = ch.pos.x - Math.sin(this.camYaw) * dist;
     const tz = ch.pos.z - Math.cos(this.camYaw) * dist;
     const ty = ch.altitude + h;
-    this._v2.set(tx, ty, tz);
-    this.camPos.lerp(this._v2, Math.min(1, dt * 7));
 
-    // keep camera above rooftops it would clip through
-    const roof = this.world.buildingHeightAt(this.camPos.x, this.camPos.z);
-    if (roof > 0 && this.camPos.y < roof + 1.2) this.camPos.y = roof + 1.2;
+    // occlusion: march from the player's head toward the desired position and
+    // stop short of the first building that would block the view
+    const hx = ch.pos.x, hy = ch.altitude + 1.8 * scale, hz = ch.pos.z;
+    let k = 1;
+    const steps = 10;
+    for (let s = 1; s <= steps; s++) {
+      const f = s / steps;
+      const sx = hx + (tx - hx) * f;
+      const sy = hy + (ty - hy) * f;
+      const sz = hz + (tz - hz) * f;
+      if (this.world.buildingHeightAt(sx, sz) > sy) { k = Math.max(0.18, (s - 1) / steps); break; }
+    }
+    this._v2.set(hx + (tx - hx) * k, hy + (ty - hy) * k, hz + (tz - hz) * k);
+    this.camPos.lerp(this._v2, Math.min(1, dt * 7));
 
     this.camera.position.copy(this.camPos).add(this.fx.shakeOffset);
     this.camTarget.lerp(this._v2.set(ch.pos.x, ch.altitude + 1.6 * scale, ch.pos.z), Math.min(1, dt * 10));
     this.camera.lookAt(this.camTarget);
 
-    // fov punch while speeding / flying
     const t = now();
     const targetFov = this.baseFov + (P.speedUntil > t ? 14 : 0) + (ch.altitude > 2 ? 6 : 0);
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 5);
@@ -999,7 +1208,6 @@ export class Game {
     this.camPos.lerp(this._v2.set(p.x - Math.sin(ang) * r, 3.5 + this.deathT * 1.5, p.z - Math.cos(ang) * r), Math.min(1, dt * 4));
     this.camera.position.copy(this.camPos).add(this.fx.shakeOffset);
     this.camera.lookAt(p.x, 1, p.z);
-    // body crumples
     P.ch.group.rotation.x = Math.min(Math.PI / 2, this.deathT * 1.8);
     P.ch.group.position.y = Math.max(0.3, 1 - this.deathT * 0.6);
   }
@@ -1026,14 +1234,14 @@ export class Game {
     const dt = Math.min(rawDt, 0.05) * this.timescale;
     this.time += dt;
 
-    // slow-mo recovery
     if (this.timescale < 1 && performance.now() / 1000 > this.slowmoUntil && this.state !== 'dying') {
       this.timescale = Math.min(1, this.timescale + rawDt * 2);
     }
 
-    // simulate lobby
+    // stream the world around the action
+    this.world.update(this.focusPos, dt);
+
     for (const b of [...this.bots]) this.updateBot(b, dt);
-    // pending "players" joining
     for (let i = this.pendingRespawns.length - 1; i >= 0; i--) {
       this.pendingRespawns[i] -= dt;
       if (this.pendingRespawns[i] <= 0) {
@@ -1041,7 +1249,6 @@ export class Game {
         if (this.bots.length < CONFIG.BOT_COUNT + (this.nemesis ? 1 : 0)) this.spawnBot({});
       }
     }
-    // background scores drift upward so the lobby feels alive
     if (Math.random() < dt * 2 && this.bots.length) {
       const b = pick(this.bots);
       if (!b.isNemesis) b.score += rand(0.5, 4);
@@ -1049,20 +1256,22 @@ export class Game {
 
     this.collectibles.update(dt, this.time);
     this.updateProjectiles(dt);
+    this.updateThrown(dt);
     this.fx.update(dt);
-
-    // world regeneration
-    this.shiftTimer -= dt;
-    if (this.shiftTimer <= 0) this.worldShift();
 
     const input = this.controls.poll();
 
     if (this.state === 'playing') {
       this.updatePlayer(dt, input);
+      this.updateTelekinesis(dt);
       this.updateClones(dt);
 
       // the director decides when your story ends
       if (this.director.update(dt) && !this.nemesis) this.sendNemesis();
+      if (this.director.phase === 'nemesis' && !this.nemesis) {
+        this.nemesisRetry -= dt;
+        if (this.nemesisRetry <= 0) this.sendNemesis();
+      }
 
       this.updateCameraPlay(dt, input);
 
@@ -1084,6 +1293,7 @@ export class Game {
         if (P.fireballArmed) buffs.push({ emblem: '☄', label: 'armed' });
         if (P.invisUntil > t) buffs.push({ emblem: '👁', label: Math.ceil(P.invisUntil - t) + 's' });
         if (P.disguiseUntil > t) buffs.push({ emblem: '🎭', label: Math.ceil(P.disguiseUntil - t) + 's' });
+        if (P.tk) buffs.push({ emblem: '🔮', label: 'hold' });
         this.ui.setBuffs(buffs);
       }
     } else if (this.state === 'menu' || this.state === 'results') {
@@ -1098,33 +1308,6 @@ export class Game {
     }
 
     this.renderer.render(this.scene, this.camera);
-  }
-
-  worldShift() {
-    this.shiftTimer = rand(...CONFIG.WORLD_SHIFT_SECONDS);
-    const next = this.world.theme === 'downtown' ? 'suburb' : 'downtown';
-    this.ui.flash();
-    SFX.worldshift();
-    if (this.state === 'playing') this.ui.announce('THE WORLD SHIFTS', { dur: 2000 });
-    this.world.regenerate(next);
-    this.collectibles.respawnAll();
-    // shake everyone out of walls
-    for (const b of this.bots) {
-      if (this.world.isBlocked(b.ch.pos.x, b.ch.pos.z)) {
-        const p = this.world.randomOpenPos();
-        b.ch.pos.set(p.x, 0, p.z);
-      }
-      b.wander = this.world.randomOpenPos();
-    }
-    if (this.player) {
-      this.world.resolve(this.player.ch.pos, 1, this.player.ch.altitude);
-      if (this.world.isBlocked(this.player.ch.pos.x, this.player.ch.pos.z, 0.4)) {
-        const p = this.world.randomOpenPos();
-        this.player.ch.pos.set(p.x, 0, p.z);
-      }
-    }
-    if (this.player?.xrayUntil > now()) { this.world.setXray(true); }
-    this.collectibles.setXray(this.player ? this.player.xrayUntil > now() : false);
   }
 
   project(v) {

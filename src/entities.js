@@ -3,7 +3,38 @@ import { CONFIG } from './config.js';
 import { rand, pick } from './utils.js';
 
 const SKIN_TONES = [0xf2c9a0, 0xd9a06b, 0xb07b4f, 0x8a5a3a, 0x6b4630];
-const OUTFITS = [0x39445e, 0x5e3946, 0x3a5e46, 0x4d3a5e, 0x5e553a, 0x2e4a5c, 0x555a60];
+
+// vivid superhero suit palette
+const PRIMARIES = [0xd7263d, 0x1f6feb, 0x12a454, 0xf2a516, 0x7b2fbf, 0xe4572e,
+  0x0aa6a6, 0xd81b8c, 0x23305e, 0x9a1750, 0x1b7f5c, 0x5546c8];
+const SECONDARIES = [0x1b1d2a, 0xf5f0e6, 0x2c3a52, 0x571c1c, 0x1c4238, 0x3d2a55,
+  0x704214, 0x232323, 0x54306e, 0x0e3d5c];
+const ACCENTS = [0xffd166, 0xffffff, 0x9df2ff, 0xff9de2, 0xffe45c, 0x7dffca, 0xff8c42, 0xc9b8ff];
+
+export function randomCostume() {
+  const primary = pick(PRIMARIES);
+  let secondary = pick(SECONDARIES);
+  const accent = pick(ACCENTS);
+  const mask = pick(['none', 'domino', 'domino', 'cowl', 'cowl', 'none', 'domino']);
+  return {
+    primary,
+    secondary,
+    accent,
+    skin: pick(SKIN_TONES),
+    cape: Math.random() < 0.45,
+    capeColor: Math.random() < 0.5 ? primary : accent,
+    mask,
+    emblem: Math.random() < 0.6,
+    gloves: Math.random() < 0.6,
+    boots: Math.random() < 0.75,
+  };
+}
+
+export const PLAYER_COSTUME = {
+  primary: 0x27406e, secondary: 0x1b2c4d, accent: 0xffd166,
+  skin: 0xf2c9a0, cape: true, capeColor: 0xc23a4a,
+  mask: 'domino', emblem: true, gloves: true, boots: true,
+};
 
 function makeLabelSprite(text, color = '#cfe0ff') {
   const c = document.createElement('canvas');
@@ -31,10 +62,11 @@ function limb(w, h, d, color) {
 }
 
 export class Character {
-  constructor(scene, { name = '', isPlayer = false, outfit = null, skin = null } = {}) {
+  constructor(scene, { name = '', isPlayer = false, costume = null } = {}) {
     this.scene = scene;
     this.isPlayer = isPlayer;
     this.name = name;
+    this.costume = costume || (isPlayer ? PLAYER_COSTUME : randomCostume());
     this.pos = new THREE.Vector3();
     this.vel = new THREE.Vector3();
     this.yaw = 0;
@@ -52,47 +84,100 @@ export class Character {
     this.disguised = false;
     this.punchT = 0;
 
-    this.outfitColor = outfit ?? pick(OUTFITS);
-    this.skinColor = skin ?? pick(SKIN_TONES);
     this.buildMesh();
     scene.add(this.group);
   }
 
   buildMesh() {
+    const C = this.costume;
     const g = new THREE.Group();
-    const outfit = this.isPlayer ? 0x27406e : this.outfitColor;
 
     this.torso = new THREE.Mesh(
       new THREE.BoxGeometry(0.72, 0.92, 0.42),
-      new THREE.MeshLambertMaterial({ color: outfit })
+      new THREE.MeshLambertMaterial({ color: C.primary })
     );
     this.torso.position.y = 1.32;
     g.add(this.torso);
 
+    // belt
+    this.belt = new THREE.Mesh(
+      new THREE.BoxGeometry(0.76, 0.14, 0.46),
+      new THREE.MeshLambertMaterial({ color: C.accent })
+    );
+    this.belt.position.y = 0.9;
+    g.add(this.belt);
+
+    // chest emblem
+    if (C.emblem) {
+      this.emblem = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.14, 0.14, 0.05, 6),
+        new THREE.MeshLambertMaterial({ color: C.accent })
+      );
+      this.emblem.rotation.x = Math.PI / 2;
+      this.emblem.position.set(0, 1.5, 0.24);
+      g.add(this.emblem);
+    }
+
     this.head = new THREE.Mesh(
       new THREE.SphereGeometry(0.29, 12, 10),
-      new THREE.MeshLambertMaterial({ color: this.skinColor })
+      new THREE.MeshLambertMaterial({ color: C.mask === 'cowl' ? C.primary : C.skin })
     );
     this.head.position.y = 2.06;
     g.add(this.head);
 
-    this.armL = limb(0.2, 0.78, 0.2, outfit);
+    if (C.mask === 'cowl') {
+      // exposed jaw under the cowl
+      this.face = new THREE.Mesh(
+        new THREE.BoxGeometry(0.3, 0.2, 0.12),
+        new THREE.MeshLambertMaterial({ color: C.skin })
+      );
+      this.face.position.set(0, 1.96, 0.24);
+      g.add(this.face);
+    } else if (C.mask === 'domino') {
+      this.maskBand = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.12, 0.14),
+        new THREE.MeshLambertMaterial({ color: Math.random() < 0.5 ? 0x14161c : C.accent })
+      );
+      this.maskBand.position.set(0, 2.1, 0.22);
+      g.add(this.maskBand);
+    }
+
+    this.armL = limb(0.2, 0.78, 0.2, C.primary);
     this.armL.position.set(-0.5, 1.72, 0);
-    this.armR = limb(0.2, 0.78, 0.2, outfit);
+    this.armR = limb(0.2, 0.78, 0.2, C.primary);
     this.armR.position.set(0.5, 1.72, 0);
     g.add(this.armL, this.armR);
 
-    const legColor = new THREE.Color(outfit).multiplyScalar(0.65).getHex();
-    this.legL = limb(0.24, 0.86, 0.24, legColor);
+    if (C.gloves) {
+      const gloveMat = new THREE.MeshLambertMaterial({ color: C.accent });
+      this.gloveL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.24, 0.22), gloveMat);
+      this.gloveL.position.y = -0.68;
+      this.armL.add(this.gloveL);
+      this.gloveR = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.24, 0.22), gloveMat.clone());
+      this.gloveR.position.y = -0.68;
+      this.armR.add(this.gloveR);
+    }
+
+    this.legL = limb(0.24, 0.86, 0.24, C.secondary);
     this.legL.position.set(-0.2, 0.88, 0);
-    this.legR = limb(0.24, 0.86, 0.24, legColor);
+    this.legR = limb(0.24, 0.86, 0.24, C.secondary);
     this.legR.position.set(0.2, 0.88, 0);
     g.add(this.legL, this.legR);
 
-    if (this.isPlayer) {
+    if (C.boots) {
+      const bootMat = new THREE.MeshLambertMaterial({ color: C.accent });
+      this.bootL = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.28, 0.3), bootMat);
+      this.bootL.position.set(0, -0.72, 0.03);
+      this.legL.add(this.bootL);
+      this.bootR = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.28, 0.3), bootMat.clone());
+      this.bootR.position.set(0, -0.72, 0.03);
+      this.legR.add(this.bootR);
+    }
+
+    if (C.cape) {
       const capeGeo = new THREE.PlaneGeometry(0.85, 1.15);
       capeGeo.translate(0, -0.55, 0);
-      this.cape = new THREE.Mesh(capeGeo, new THREE.MeshLambertMaterial({ color: 0xc23a4a, side: THREE.DoubleSide }));
+      this.cape = new THREE.Mesh(capeGeo, new THREE.MeshLambertMaterial({ color: C.capeColor, side: THREE.DoubleSide }));
       this.cape.position.set(0, 1.78, 0.26);
       g.add(this.cape);
     }
@@ -122,12 +207,12 @@ export class Character {
     }
 
     this.group = g;
-    this.bodyMats = [
-      this.torso.material, this.head.material,
-      this.armL.material, this.armR.material,
-      this.legL.material, this.legR.material,
-      ...(this.cape ? [this.cape.material] : []),
-    ];
+    this.bodyMats = [];
+    g.traverse((o) => {
+      if (o.material && o !== this.aura && o !== this.iceShell && o !== this.label) {
+        this.bodyMats.push(o.material);
+      }
+    });
   }
 
   setPower(power) {
@@ -139,10 +224,18 @@ export class Character {
     this.aura.material.color.set(0xff2038);
     this.aura.material.opacity = 0.95;
     this.aura.scale.setScalar(1.5);
-    this.torso.material.color.set(0x1a0d12);
-    this.armL.material.color.set(0x1a0d12);
-    this.armR.material.color.set(0x1a0d12);
-    this.head.material.color.set(0x2a1016);
+    const dark = 0x16090d, darker = 0x24080f;
+    for (const part of [this.torso, this.armL, this.armR, this.legL, this.legR]) {
+      part.material.color.set(dark);
+    }
+    this.head.material.color.set(darker);
+    if (this.face) this.face.material.color.set(darker);
+    if (this.maskBand) this.maskBand.material.color.set(0xff2038);
+    this.belt.material.color.set(0xff2038);
+    if (this.emblem) this.emblem.material.color.set(0xff2038);
+    if (this.gloveL) { this.gloveL.material.color.set(0xff2038); this.gloveR.material.color.set(0xff2038); }
+    if (this.bootL) { this.bootL.material.color.set(darker); this.bootR.material.color.set(darker); }
+    if (this.cape) this.cape.material.color.set(0x2a0a10);
     if (this.label) { this.group.remove(this.label); this.label = null; }
     const l = makeLabelSprite(this.name, '#ff5470');
     l.position.y = 2.75;
