@@ -34,9 +34,36 @@ Telekinesis is a channelled power: hold the power input to seize the nearest ene
 ```bash
 npm install
 npm run dev       # local dev server
-npm run build     # generates PWA icons + production build in dist/
+npm run build     # generates PWA icons + font + production build in dist/
 npm run preview   # serve the production build
+npm run check     # verify dist/ contains only host-safe file types
 ```
+
+## Deploying to your own host
+
+`npm run build` writes the complete site to `dist/`. **Upload the *contents* of
+`dist/`, not the repository folder** — `index.html` must land at the root of
+whatever you serve. Nothing else in this repo (README, `src/`, `scripts/`,
+`package.json`, …) belongs on the server.
+
+The build deliberately emits only file types static hosts accept:
+
+```
+dist/
+├── index.html
+├── manifest.json     PWA manifest (named .json, not .webmanifest)
+├── sw.js             service worker — offline + installable
+├── assets/           game bundle: one .js, one .css (font embedded inline)
+└── icons/            icon-192.png, icon-512.png
+```
+
+`npm run build` ends by running `scripts/check-dist.mjs`, which fails the build
+if anything outside `.html .js .css .json .png` ends up in `dist/`.
+
+The build uses relative paths, so it works from a domain root or any
+sub-directory. `sw.js` and `manifest.json` are optional — delete them and the
+game still plays, you just lose offline/installable support (which also
+requires the site be served over HTTPS).
 
 Tuning knobs (RTP, bet sizes, spawn probabilities, bot counts, world size, etc.) live in `src/config.js`.
 

@@ -3,3 +3,4 @@ dist/
 public/icons/
 .DS_Store
 *.log
+src/font.css

@@ -5,10 +5,11 @@
   "description": "Irremarkables — a 3rd-person open-world simulated-multiplayer superhero betting game (PWA)",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "node scripts/gen-icons.mjs && vite build",
+    "dev": "node scripts/gen-font.mjs && vite",
+    "build": "node scripts/gen-icons.mjs && node scripts/gen-font.mjs && vite build && node scripts/check-dist.mjs",
     "preview": "vite preview",
-    "icons": "node scripts/gen-icons.mjs"
+    "icons": "node scripts/gen-icons.mjs",
+    "check": "node scripts/check-dist.mjs"
   },
   "dependencies": {
     "@fontsource/bangers": "^5.3.0",
