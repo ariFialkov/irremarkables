@@ -304,8 +304,8 @@ export class Character {
     this.group.position.set(this.pos.x, this.altitude + this.groundY + this.hoverBob, this.pos.z);
     this.group.rotation.y = this.yaw;
 
-    // airborne body language: roll into turns, nose down with speed, lean back
-    // when drifting in reverse — all on the body, so the cape and hits follow
+    // airborne body language: roll into turns and dip the nose with speed — on
+    // the body, so the cape and hits follow. Reverse just holds the hover pose.
     let dYaw = this.yaw - this.prevYaw;
     while (dYaw > Math.PI) dYaw -= Math.PI * 2;
     while (dYaw < -Math.PI) dYaw += Math.PI * 2;
@@ -314,7 +314,7 @@ export class Character {
     this.turnRate += (Math.max(-6, Math.min(6, yawRate)) - this.turnRate) * Math.min(1, dt * 6);
     const airborne = flying && this.altitude > 0.8;
     const wantRoll = airborne ? -Math.max(-0.6, Math.min(0.6, this.turnRate * 0.16)) : 0;
-    const wantPitch = airborne ? (this.backward ? 0.16 : speed > 1.6 ? -0.10 * Math.min(1, speed / 12) : 0) : 0;
+    const wantPitch = airborne && !this.backward && speed > 1.6 ? -0.10 * Math.min(1, speed / 12) : 0;
     this.roll += (wantRoll - this.roll) * Math.min(1, dt * 5);
     this.pitch += (wantPitch - this.pitch) * Math.min(1, dt * 4);
     if (this.body) this.body.rotation.set(this.pitch, 0, this.roll);
