@@ -4,7 +4,7 @@ import { POWERS, counterPowerFor } from './powers.js';
 import { World } from './world.js';
 import { FX } from './fx.js';
 import { Collectibles } from './collectibles.js';
-import { Character, PLAYER_COSTUME } from './entities.js';
+import { Character } from './entities.js';
 import { Director } from './rtp.js';
 import { Controls } from './controls.js';
 import { UI } from './ui.js';
@@ -51,6 +51,7 @@ export class Game {
     this.bots = [];
     this.clones = [];
     this.thrown = [];          // telekinetically flung bodies & props
+    this.pendingHits = [];     // scheduled melee impacts (land on the animation's hit frame)
     this.pendingRespawns = [];
     this.player = null;
     this.nemesis = null;
@@ -103,9 +104,8 @@ export class Game {
   // ================= BOTS =================
 
   spawnBot({ initial = false, pos = null } = {}) {
-    const ch = new Character(this.scene, { name: botName() });
     const power = weightedPick(POWERS, (p) => (p.rare ? 0.35 : 1));
-    ch.setPower(power);
+    const ch = new Character(this.scene, { name: botName(), power });
     let p = pos;
     if (!p && !initial && this.player && this.state === 'playing' && Math.random() < 0.65) {
       // bias replacements toward the player so the lobby stays lively nearby
@@ -238,8 +238,11 @@ export class Game {
       }
     }
 
-    // move
-    if (dist > (chasing ? 1.9 : 1.2)) {
+    // move (hold position while swinging; infighters close tighter)
+    const stopDist = chasing ? Math.max(1.6, ch.combat.range * 0.72) : 1.2;
+    if (ch.attacking && chasing) {
+      ch.vel.set(0, 0, 0);
+    } else if (dist > stopDist) {
       const vx = (dx / dist) * speed, vz = (dz / dist) * speed;
       ch.vel.set(vx, 0, vz);
       ch.pos.x += vx * dt;
@@ -255,17 +258,40 @@ export class Game {
       if (!chasing && b.repath > 1) b.wander = this.world.randomOpenPos(ch.pos, 10, 45);
     }
 
-    // attack
-    if (chasing && dist < CONFIG.BOT_ATTACK_RANGE && b.attackCd <= 0 && ch.altitude < 1.5) {
-      b.attackCd = rand(0.7, 1.1);
-      ch.punchT = 0.22;
-      if (b.target === 'player') {
-        this.damagePlayer(b.isNemesis ? 34 : CONFIG.BOT_ATTACK_DPS * rand(0.8, 1.3), b);
-      } else if (b.target) {
-        b.target.hp -= rand(26, 42);
-        this.fx.emit(b.target.ch.pos.x, 1.4, b.target.ch.pos.z, { count: 6, color: 0xffffff, speed: 3.5, life: 0.3, size: 1.1 });
-        if (b.target.hp <= 0) this.killBot(b.target, { byBot: b });
+    // attack: play the archetype's move, land the hit on its impact frame
+    if (chasing && dist < ch.combat.range && b.attackCd <= 0 && ch.altitude < 1.5 && !ch.attacking) {
+      const mv = ch.startAttack();
+      b.attackCd = mv.duration + rand(0.25, 0.7);
+      // face the target for the swing
+      ch.yaw = Math.atan2(dx, dz);
+      for (const at of mv.hits) {
+        this.pendingHits.push({ at: this.time + at, owner: 'bot', bot: b, target: b.target, damage: mv.damage, range: mv.range });
       }
+    }
+  }
+
+  // Resolve scheduled melee impacts (player, bots, clones).
+  processHits() {
+    for (let i = this.pendingHits.length - 1; i >= 0; i--) {
+      const h = this.pendingHits[i];
+      if (h.at > this.time) continue;
+      this.pendingHits.splice(i, 1);
+      if (h.owner === 'player') { this.resolvePlayerHit(h); continue; }
+      const att = h.owner === 'bot' ? h.bot : h.clone;
+      if (!att || !att.ch.alive) continue;
+      if (h.owner === 'bot' && h.target === 'player') {
+        if (!this.player?.ch.alive) continue;
+        const d = att.ch.pos.distanceTo(this.player.ch.pos);
+        if (d < h.range + 0.6) this.damagePlayer(h.damage * (att.isNemesis ? 0.62 : 0.3), att);
+        continue;
+      }
+      const tgt = h.target;
+      if (!tgt || !tgt.ch?.alive || tgt.held) continue;
+      const d = att.ch.pos.distanceTo(tgt.ch.pos);
+      if (d > h.range + 0.6) continue;
+      tgt.hp -= h.damage;
+      this.fx.emit(tgt.ch.pos.x, 1.4 + tgt.ch.altitude, tgt.ch.pos.z, { count: 6, color: 0xffffff, speed: 3.5, life: 0.3, size: 1.1 });
+      if (tgt.hp <= 0) this.killBot(tgt, h.owner === 'clone' ? { byPlayer: true } : { byBot: att });
     }
   }
 
@@ -329,8 +355,7 @@ export class Game {
     this.director.startRound(bet);
 
     if (this.player) this.player.ch.dispose();
-    const ch = new Character(this.scene, { name: 'YOU', isPlayer: true });
-    ch.setPower(power);
+    const ch = new Character(this.scene, { name: 'YOU', isPlayer: true, power });
     const p = this.world.randomOpenPos(this.focusPos, 5, 40);
     ch.pos.set(p.x, 0, p.z);
     this.player = {
@@ -402,11 +427,22 @@ export class Game {
     const P = this.player, ch = P.ch;
 
     if (P.fireballArmed) { this.launchFireball(); return; }
+    if (ch.attacking) return;   // one swing at a time — archetype speed sets the cadence
 
-    ch.punchT = 0.25;
-    SFX.punch();
+    // aim the swing where the camera looks
+    ch.yaw = this.camYaw;
+    const mv = ch.startAttack();
+    SFX.whoosh();
+    for (const at of mv.hits) {
+      this.pendingHits.push({ at: this.time + at, owner: 'player', damage: mv.damage, range: mv.range * ch.curScale, arc: mv.arc });
+    }
+  }
+
+  resolvePlayerHit(h) {
+    const P = this.player;
+    if (!P?.ch.alive) return;
+    const ch = P.ch;
     const scale = ch.curScale;
-    const range = 3.0 * scale;
     const fx = Math.sin(ch.yaw), fz = Math.cos(ch.yaw);
     let hitAny = false;
 
@@ -414,10 +450,10 @@ export class Game {
       if (!b.ch.alive || b.held) continue;
       const dx = b.ch.pos.x - ch.pos.x, dz = b.ch.pos.z - ch.pos.z;
       const d = Math.hypot(dx, dz);
-      if (d > range + 0.6) continue;
+      if (d > h.range + 0.6) continue;
       if (Math.abs(b.ch.altitude - ch.altitude) > 3) continue;
       const dot = (dx * fx + dz * fz) / (d || 1);
-      if (d > 1.2 && dot < 0.35) continue;
+      if (d > 1.2 && dot < h.arc) continue;
       hitAny = true;
 
       const disguiseStrike = P.disguiseUntil > now();
@@ -428,12 +464,13 @@ export class Game {
         if (disguiseStrike) this.revealDisguise();
         continue;
       }
-      b.hp -= 55;
+      b.hp -= h.damage;
       this.fx.emit(b.ch.pos.x, 1.4 + b.ch.altitude, b.ch.pos.z, { count: 8, color: 0xffffff, speed: 4, life: 0.3, size: 1.2 });
-      this.fx.addShake(0.15);
+      this.fx.addShake(0.1 + h.damage * 0.002);
+      SFX.punch();
       if (b.hp <= 0) this.killBot(b, { byPlayer: true });
       else {
-        const k = 1.1 / (d || 1);
+        const k = (0.6 + h.damage * 0.012) / (d || 1);
         b.ch.pos.x += dx * k; b.ch.pos.z += dz * k;
         if (Math.random() < 0.5) { b.target = 'player'; b.aggressive = true; }
       }
@@ -504,6 +541,7 @@ export class Game {
 
     const px = ch.pos.x, pz = ch.pos.z, py = 1.2 + ch.altitude;
     let used = true;
+    ch.cast(power.id);   // power-specific body language
 
     switch (power.id) {
       case 'flight': {
@@ -576,18 +614,16 @@ export class Game {
         SFX.morph();
         this.fx.emit(px, py, pz, { count: 30, color: 0xff9de2, speed: 5, life: 0.7, size: 1.8 });
         ch.setOpacity(1);
-        if (ch.cape) ch.cape.visible = false;
-        ch.torso.material.color.set(0x555a60);
-        ch.armL.material.color.set(0x555a60);
-        ch.armR.material.color.set(0x555a60);
+        // wear another hero's face: borrow a random lobby archetype
+        const others = POWERS.filter((p) => p.id !== P.powerMain.id);
+        ch.disguiseAs(pick(others).id);
         for (const b of this.bots) if (b.target === 'player' && !b.isNemesis) b.target = null;
         break;
       }
       case 'duplication': {
         SFX.dupe();
         for (let i = 0; i < 2; i++) {
-          const cch = new Character(this.scene, { name: 'YOU', costume: PLAYER_COSTUME });
-          cch.setPower(P.powerMain);
+          const cch = new Character(this.scene, { name: 'YOU', power: P.powerMain, paletteSeed: ch.paletteSeed });
           cch.pos.set(px + rand(-2, 2), 0, pz + rand(-2, 2));
           this.fx.emit(cch.pos.x, 1.2, cch.pos.z, { count: 20, color: 0xffb27d, speed: 5, life: 0.6 });
           this.clones.push({
@@ -632,6 +668,7 @@ export class Game {
     }
 
     P.tk = { kind, bot, prop, phase: 'lift', y: 0, auraT: 0 };
+    ch.cast('telekinesis', 30);
     if (bot) { bot.held = true; bot.ch.vel.set(0, 0, 0); }
     if (prop) { prop.busy = true; prop.baseRot = prop.mesh.rotation.y; }
     SFX.tk();
@@ -704,6 +741,8 @@ export class Game {
         this.thrown.push({ kind: tk.kind, bot: tk.bot, prop: tk.prop, vel, mode: 'throw', spin: rand(3, 7) });
         P.cds['telekinesis'] = now() + this.playerMainPower().cooldown;
         P.tk = null;
+        ch.stopCast();
+        ch.startAttack();   // hurl with a throw motion
         SFX.whoosh();
         this.fx.addShake(0.35);
         this.fx.emit(pos.x, bobY + 1, pos.z, { count: 20, color: TK_COLOR, speed: 6, life: 0.5, size: 1.8 });
@@ -719,6 +758,7 @@ export class Game {
     this.thrown.push({ kind: tk.kind, bot: tk.bot, prop: tk.prop, vel: new THREE.Vector3(0, 0, 0), mode: 'drop', spin: 0 });
     P.cds['telekinesis'] = now() + 1.5;
     P.tk = null;
+    P.ch.stopCast();
     SFX.invis();
   }
 
@@ -730,6 +770,7 @@ export class Game {
       if (tk.kind === 'bot' && tk.bot.ch.alive) { tk.bot.held = false; tk.bot.ch.altitude = 0; }
       if (tk.kind === 'prop' && tk.prop.alive) { tk.prop.busy = false; tk.prop.mesh.position.y = 0; }
       P.tk = null;
+      P.ch.stopCast();
     } else {
       this.releaseTelekinesis();
     }
@@ -809,10 +850,7 @@ export class Game {
   revealDisguise() {
     const P = this.player, ch = P.ch;
     P.disguiseUntil = 0;
-    if (ch.cape) ch.cape.visible = true;
-    ch.torso.material.color.set(ch.costume.primary);
-    ch.armL.material.color.set(ch.costume.primary);
-    ch.armR.material.color.set(ch.costume.primary);
+    ch.undisguise();
     this.fx.emit(ch.pos.x, 1.4, ch.pos.z, { count: 18, color: 0xff9de2, speed: 5, life: 0.5 });
   }
 
@@ -973,6 +1011,7 @@ export class Game {
       if (th.kind === 'prop' && th.prop.alive) { th.prop.busy = false; th.prop.mesh.position.y = 0; }
     }
     this.thrown = [];
+    this.pendingHits = [];
     if (this.player) { this.player.ch.dispose(); this.player = null; }
     if (this.nemesis) { this.killBot(this.nemesis, { silent: true }); this.nemesis = null; }
     this.nemesisRetry = 0;
@@ -1019,6 +1058,8 @@ export class Game {
 
     // altitude / flight
     P.prevAlt = ch.altitude;
+    ch.flying = P.flying && P.powerMain.id === 'flight';
+    ch.bank += ((input.turn * 0.9 + input.look * 6) - ch.bank) * Math.min(1, dt * 4);
     if (P.flying && P.powerMain.id === 'flight') {
       ch.altitude = Math.min(13, ch.altitude + dt * 9);
       if (Math.random() < 0.6) {
@@ -1059,7 +1100,7 @@ export class Game {
 
     // timed effects wearing off
     ch.setOpacity(P.invisUntil > t ? 0.15 : 1);
-    if (P.disguiseUntil > 0 && P.disguiseUntil < t && ch.torso.material.color.getHex() === 0x555a60) this.revealDisguise();
+    if (P.disguiseUntil > 0 && P.disguiseUntil < t && ch.disguise) this.revealDisguise();
     if (P.xrayUntil > 0 && P.xrayUntil < t) {
       P.xrayUntil = 0;
       this.world.setXray(false);
@@ -1131,11 +1172,12 @@ export class Game {
           c.ch.pos.z += c.ch.vel.z * dt;
           c.ch.yaw = Math.atan2(dx, dz);
           this.world.resolve(c.ch.pos, 0.55, 0);
-        } else if (c.attackCd <= 0) {
-          c.attackCd = 0.8;
-          c.ch.punchT = 0.22;
-          c.target.hp -= 45;
-          if (c.target.hp <= 0) this.killBot(c.target, { byPlayer: true });
+        } else if (c.attackCd <= 0 && !c.ch.attacking) {
+          const mv = c.ch.startAttack();
+          c.attackCd = mv.duration + 0.3;
+          for (const at of mv.hits) {
+            this.pendingHits.push({ at: this.time + at, owner: 'clone', clone: c, target: c.target, damage: mv.damage * 0.8, range: mv.range });
+          }
         }
       } else {
         c.ch.vel.set(0, 0, 0);
@@ -1266,6 +1308,7 @@ export class Game {
     this.collectibles.update(dt, this.time);
     this.updateProjectiles(dt);
     this.updateThrown(dt);
+    this.processHits();
     this.fx.update(dt);
 
     const input = this.controls.poll();
