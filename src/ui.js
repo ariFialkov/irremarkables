@@ -129,7 +129,6 @@ export class UI {
     $('keys-hint').style.display = isTouch ? 'none' : '';
     $('attack-btn').style.display = isTouch ? '' : 'none';
     $('killfeed').innerHTML = '';
-    this.vignette(false);
   }
 
   // ---------- HUD ----------
@@ -201,7 +200,22 @@ export class UI {
     this.announceTimer = setTimeout(() => el.classList.add('hidden'), dur);
   }
 
-  vignette(on) { $('vignette').classList.toggle('on', on); }
+  // Comic-book onomatopoeia burst at a screen position.
+  bam(x, y, word, { color = '#ffe45c', burst = '#ff3b3b', size = 1 } = {}) {
+    const live = this.hud.querySelectorAll('.bam');
+    if (live.length > 9) live[0].remove();
+    const el = document.createElement('div');
+    el.className = 'bam';
+    el.textContent = word;
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    el.style.setProperty('--rot', (Math.random() * 28 - 14).toFixed(1) + 'deg');
+    el.style.setProperty('--sz', size.toFixed(2));
+    el.style.setProperty('--ink-col', color);
+    el.style.setProperty('--burst', burst);
+    this.hud.appendChild(el);
+    setTimeout(() => el.remove(), 1000);
+  }
 
   flash() {
     const el = $('flash');

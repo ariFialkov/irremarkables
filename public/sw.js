@@ -1,6 +1,6 @@
 // Irremarkables service worker — cache-first for the app shell,
 // stale-while-revalidate for everything else same-origin.
-const VERSION = 'irr-v3';
+const VERSION = 'irr-v4';
 const SHELL = ['./', './index.html', './manifest.json', './anims.json'];
 
 self.addEventListener('install', (e) => {

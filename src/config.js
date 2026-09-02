@@ -33,7 +33,16 @@ export const CONFIG = {
   BOT_SPEED: 6.0,
   BOT_ATTACK_DPS: 16,
   BOT_ATTACK_RANGE: 2.6,
-  NEMESIS_SPEED: 11.5,
+
+  // ---- Hunters (how the director ends a round, disguised as normal play) ----
+  STALK_FRACTION: 0.65,    // of the target: hunters start drifting toward the player
+  HUNTER_COUNT: 2,         // bots quietly assigned to the job
+  HUNTER_SPEED: 11.5,      // strike-phase chase speed (player runs 9.5)
+  HUNTER_HP: 320,          // strike-phase toughness
+  HUNTER_DAMAGE: 0.9,      // fraction of the archetype's damage that lands on the player
+  HUNTER_FIREBALL_AT: 8,   // seconds into the strike before hunters start lobbing fireballs
+  HUNTER_GIANT_AT: 15,     // ... before reinforcements arrive enlarged
+  HUNTER_BLINK_AT: 22,     // ... before hunters blink straight to the player
 
   // ---- World (streamed chunks; biomes blend spatially via a drifting noise field) ----
   BLOCK: 22,               // city block size

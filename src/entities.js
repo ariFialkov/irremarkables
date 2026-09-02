@@ -63,6 +63,7 @@ export class Character {
     this.bank = 0;
     this.nemesis = false;
     this.disguise = null;
+    this.propMesh = null;
     this.opacity = 1;
     this.rootMoved = false;
 
@@ -163,7 +164,29 @@ export class Character {
     this.paletteSeed = saveSeed;
   }
 
+  // Shapeshift into scenery: the hero body is hidden and a prop mesh sits in
+  // its place until undisguise() brings the body back.
+  disguiseAsProp(mesh) {
+    this.undisguise();
+    this.propMesh = mesh;
+    mesh.rotation.y = -this.yaw;   // props are built axis-aligned; undo the group yaw
+    this.group.add(mesh);
+    this.body.visible = false;
+    if (this.cape) this.cape.visible = false;
+    this.aura.visible = false;
+    if (this.label) this.label.visible = false;
+  }
+
   undisguise() {
+    if (this.propMesh) {
+      this.group.remove(this.propMesh);
+      this.propMesh.geometry.dispose();
+      this.propMesh = null;
+      if (this.body) this.body.visible = true;
+      if (this.cape) this.cape.visible = true;
+      this.aura.visible = true;
+      if (this.label) this.label.visible = true;
+    }
     if (!this.disguise) return;
     this.disguise = null;
     this.buildLook(this.power.id);
@@ -278,6 +301,7 @@ export class Character {
   }
 
   dispose() {
+    this.undisguise();
     this.destroyBody();
     this.scene.remove(this.group);
     this.group.traverse((o) => {

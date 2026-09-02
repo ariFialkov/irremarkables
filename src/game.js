@@ -14,6 +14,28 @@ import { rand, randInt, pick, clamp, botName, formatMoney, weightedPick, RUNTIME
 const now = () => performance.now() / 1000;
 const TK_COLOR = 0xc07bff;
 
+// comic-book impact words per hit kind
+const BAM_WORDS = {
+  hit: ['POW!', 'WHAM!', 'SMACK!', 'BIFF!', 'THWACK!', 'BONK!', 'WHACK!', 'BAM!'],
+  kill: ['KAPOW!', 'CRUNCH!', 'BLAM!', 'KRAK!', 'WHAMMO!', 'KA-BLAM!'],
+  fire: ['FWOOSH!', 'KABOOM!', 'BLAZE!'],
+  shatter: ['CRACK!', 'SHATTER!', 'KRISH!'],
+  slam: ['SLAM!', 'CRASH!', 'WHUMP!'],
+  hurt: ['OOF!', 'OUCH!', 'UGH!', 'ARGH!'],
+  boom: ['BOOM!', 'KABOOM!', 'KRAKOOM!'],
+  squish: ['SQUISH!', 'SPLAT!', 'CRUNCH!'],
+};
+const BAM_STYLE = {
+  hit: { color: '#ffe45c', burst: '#ff3b3b', size: 1 },
+  kill: { color: '#ffffff', burst: '#ff2038', size: 1.3 },
+  fire: { color: '#ffd166', burst: '#ff6a1a', size: 1.4 },
+  shatter: { color: '#e9fbff', burst: '#3fb7ff', size: 1.2 },
+  slam: { color: '#ffe45c', burst: '#8a3dff', size: 1.3 },
+  hurt: { color: '#ffb3c0', burst: '#7a1a2a', size: 0.9 },
+  boom: { color: '#ffffff', burst: '#ff9a1a', size: 1.6 },
+  squish: { color: '#d9ffb3', burst: '#3fa64a', size: 1.2 },
+};
+
 export class Game {
   constructor(canvas) {
     this.canvas = canvas;
@@ -55,8 +77,10 @@ export class Game {
     this.corpses = [];         // fallen heroes playing out their death clip before vanishing
     this.pendingRespawns = [];
     this.player = null;
-    this.nemesis = null;
-    this.nemesisRetry = 0;
+    this.hunters = [];        // bots quietly assigned to end the round
+    this.strikeT = 0;         // seconds since the strike began (drives escalation)
+    this.hunterRefill = 0;
+    this.hunterFireCd = 0;
 
     // camera state
     this.camYaw = 0;
@@ -102,6 +126,18 @@ export class Game {
     return this.world.focus;
   }
 
+  // ---- comic impact words ----
+  bam(x, y, z, kind, sizeMul = 1) {
+    const dc = Math.hypot(x - this.camPos.x, z - this.camPos.z);
+    if (dc > 48) return;
+    const s = this.project(this._v1.set(x, y, z));
+    if (!s || s.x < -40 || s.y < -40 || s.x > this.canvas.clientWidth + 40 || s.y > this.canvas.clientHeight + 40) return;
+    const st = BAM_STYLE[kind] || BAM_STYLE.hit;
+    const far = clamp(1.25 - dc / 40, 0.55, 1);
+    this.ui.bam(s.x + rand(-14, 14), s.y + rand(-10, 10), pick(BAM_WORDS[kind] || BAM_WORDS.hit),
+      { color: st.color, burst: st.burst, size: st.size * sizeMul * far });
+  }
+
   // ================= BOTS =================
 
   spawnBot({ initial = false, pos = null } = {}) {
@@ -125,7 +161,9 @@ export class Game {
       quirkCd: rand(2, 8),
       aggressive: Math.random() < 0.35,
       score: initial ? rand(0.2, 8) * 10 : rand(0.5, 3),
-      isNemesis: false,
+      hunter: false,
+      stalkCd: 0,
+      farT: 0,
       hp: 100,
       held: false,
     };
@@ -143,7 +181,7 @@ export class Game {
 
     // keep the lobby near the action: far-drifted bots quietly re-enter nearby
     const f = this.focusPos;
-    if (!b.isNemesis && Math.hypot(ch.pos.x - f.x, ch.pos.z - f.z) > CONFIG.RECYCLE_DIST + 20) {
+    if (!b.hunter && Math.hypot(ch.pos.x - f.x, ch.pos.z - f.z) > CONFIG.RECYCLE_DIST + 20) {
       const p = this.world.randomOpenPos(f, 55, 100);
       ch.pos.set(p.x, 0, p.z);
       b.target = null;
@@ -153,11 +191,15 @@ export class Game {
     b.repath -= dt;
     b.attackCd -= dt;
     b.quirkCd -= dt;
+    b.stalkCd -= dt;
 
+    const phase = this.director.phase;
+    const hunting = b.hunter && phase === 'strike' && this.player?.ch.alive && this.state === 'playing';
+    const stalking = b.hunter && phase === 'stalk' && this.player?.ch.alive && this.state === 'playing';
     const playerTargetable = this.player && this.player.ch.alive && this.state === 'playing' &&
       !this.playerHidden() && this.player.ch.curScale < 1.5;
 
-    if (b.repath <= 0 && !b.isNemesis) {
+    if (b.repath <= 0 && !hunting) {
       b.repath = rand(1.2, 3);
       b.target = null;
       let best = null, bestD = 24;
@@ -166,19 +208,30 @@ export class Game {
         const d = ch.pos.distanceTo(other.ch.pos);
         if (d < bestD) { best = other; bestD = d; }
       }
-      if (playerTargetable && b.aggressive) {
+      if (playerTargetable && b.aggressive && !stalking) {
         const dP = ch.pos.distanceTo(this.player.ch.pos);
         if (dP < 15 && dP < bestD) { b.target = 'player'; }
       }
-      if (!b.target && best && Math.random() < 0.55) b.target = best;
-      if (!b.target && Math.random() < 0.6) b.wander = this.world.randomOpenPos(ch.pos, 10, 45);
+      if (!b.target && best && Math.random() < (stalking ? 0.25 : 0.55)) b.target = best;
+      if (!b.target && !stalking && Math.random() < 0.6) b.wander = this.world.randomOpenPos(ch.pos, 10, 45);
     }
 
-    if (b.isNemesis) b.target = 'player';
+    // stalking: look like an idle wanderer, but always drift to within a few
+    // metres of the player so the strike starts from close range
+    if (stalking && b.stalkCd <= 0) {
+      b.stalkCd = rand(1.5, 3.5);
+      const pp = this.player.ch.pos;
+      const ang = rand(0, Math.PI * 2), r = rand(6, 13);
+      const wx = pp.x + Math.sin(ang) * r, wz = pp.z + Math.cos(ang) * r;
+      b.wander = this.world.isBlocked(wx, wz, 0.9) ? this.world.randomOpenPos(pp, 5, 13) : { x: wx, z: wz };
+      if (b.target && ch.pos.distanceTo(pp) > 18) b.target = null;   // don't get dragged off by a brawl
+    }
+
+    if (hunting) b.target = 'player';
 
     let dest = b.wander, chasing = false;
     if (b.target === 'player') {
-      if (!this.player || !this.player.ch.alive || (!b.isNemesis && !playerTargetable)) b.target = null;
+      if (!this.player || !this.player.ch.alive || (!hunting && !playerTargetable)) b.target = null;
       else { dest = this.player.ch.pos; chasing = true; }
     } else if (b.target) {
       if (!b.target.ch.alive || b.target.ch.frozen || b.target.held) b.target = null;
@@ -187,7 +240,7 @@ export class Game {
 
     const dx = dest.x - ch.pos.x, dz = dest.z - ch.pos.z;
     const dist = Math.hypot(dx, dz);
-    let speed = b.isNemesis ? CONFIG.NEMESIS_SPEED : CONFIG.BOT_SPEED;
+    let speed = hunting ? CONFIG.HUNTER_SPEED : CONFIG.BOT_SPEED;
 
     // power quirks — spectacle & motion variety
     if (b.quirkCd <= 0) {
@@ -216,29 +269,27 @@ export class Game {
     ch.setOpacity(b.fadeUntil && now() < b.fadeUntil ? 0.25 : 1);
 
     // flight altitude
-    const wantFly = (b.flyUntil && now() < b.flyUntil) ||
-      (b.isNemesis && this.player && this.player.ch.altitude > 2);
-    const targetAlt = wantFly ? (b.isNemesis ? Math.max(0, this.player.ch.altitude) : 6 + Math.sin(this.time * 0.7 + ch.phase) * 2) : 0;
+    const chasingFlyer = hunting && this.player.ch.altitude > 2;
+    const wantFly = (b.flyUntil && now() < b.flyUntil) || chasingFlyer;
+    const targetAlt = wantFly ? (chasingFlyer ? Math.max(0, this.player.ch.altitude) : 6 + Math.sin(this.time * 0.7 + ch.phase) * 2) : 0;
     ch.altitude += (targetAlt - ch.altitude) * Math.min(1, dt * 2.2);
     if (ch.altitude < 0.05) ch.altitude = 0;
     // flying pose only for real flight (and the glide back down after it)
     ch.flying = wantFly || (ch.flying && ch.altitude > 0.4);
 
-    // nemesis catch-up blink
-    if (b.isNemesis && this.player) {
+    // a hunter that loses the player quietly re-enters the scene nearby
+    if (hunting) {
       const dP = ch.pos.distanceTo(this.player.ch.pos);
-      if (dP > 26) {
-        const px = this.player.ch.pos.x - (dx / dist) * 10;
-        const pz = this.player.ch.pos.z - (dz / dist) * 10;
-        this.fx.emit(ch.pos.x, 1.2, ch.pos.z, { count: 20, color: 0xff2038, speed: 6, life: 0.5 });
-        ch.pos.set(
-          this.world.isBlocked(px, pz) ? this.player.ch.pos.x + rand(-6, 6) : px, 0,
-          this.world.isBlocked(px, pz) ? this.player.ch.pos.z + rand(-6, 6) : pz);
-        this.fx.emit(ch.pos.x, 1.2, ch.pos.z, { count: 20, color: 0xff2038, speed: 6, life: 0.5 });
-        SFX.teleport();
+      if (dP > 34) b.farT += dt; else b.farT = 0;
+      if (b.farT > 2.5 || (this.strikeT > CONFIG.HUNTER_BLINK_AT && dP > 9)) {
+        this.relocateHunter(b, this.strikeT > CONFIG.HUNTER_BLINK_AT);
+        b.farT = 0;
       }
-      if (Math.random() < 0.5) {
-        this.fx.emit(ch.pos.x, rand(0.4, 2), ch.pos.z, { count: 1, color: 0xff2038, speed: 1.2, life: 0.5, size: 1.6, gravity: 1 });
+      // enlarged reinforcements crush on contact
+      if (ch.curScale > 1.5 && dP < 1.9 * ch.curScale && Math.abs(this.player.ch.altitude - ch.altitude) < 2.5) {
+        this.bam(this.player.ch.pos.x, 1.2 + this.player.ch.altitude, this.player.ch.pos.z, 'squish', 1.3);
+        this.playerDeath(b);
+        return;
       }
     }
 
@@ -286,7 +337,8 @@ export class Game {
       if (h.owner === 'bot' && h.target === 'player') {
         if (!this.player?.ch.alive) continue;
         const d = att.ch.pos.distanceTo(this.player.ch.pos);
-        if (d < h.range + 0.6) this.damagePlayer(h.damage * (att.isNemesis ? 0.62 : 0.3), att);
+        const striking = att.hunter && this.director.phase === 'strike';
+        if (d < h.range + 0.6) this.damagePlayer(h.damage * (striking ? CONFIG.HUNTER_DAMAGE : 0.3), att);
         continue;
       }
       const tgt = h.target;
@@ -297,6 +349,7 @@ export class Game {
       tgt.ch.hitReaction();
       this.fx.emit(tgt.ch.pos.x, 1.4 + tgt.ch.altitude, tgt.ch.pos.z, { count: 6, color: 0xffffff, speed: 3.5, life: 0.3, size: 1.1 });
       if (tgt.hp <= 0) this.killBot(tgt, h.owner === 'clone' ? { byPlayer: true } : { byBot: att });
+      else if (h.owner === 'clone' || Math.random() < 0.5) this.bam(tgt.ch.pos.x, 1.5 + tgt.ch.altitude, tgt.ch.pos.z, 'hit', 0.75);
     }
   }
 
@@ -313,6 +366,8 @@ export class Game {
       else { this.fx.emit(px, py, pz, { count: 24, color: col, speed: 8, life: 0.7, size: 1.8 }); }
       this.fx.ring(px, pz, { color: col, maxR: 3, dur: 0.4 });
       SFX.kill();
+      const word = cause === 'fire' ? 'fire' : cause === 'shatter' ? 'shatter' : cause === 'slam' ? 'slam' : cause === 'squish' ? 'squish' : 'kill';
+      this.bam(px, py + 0.4, pz, word, byPlayer ? 1 : 0.8);
     }
 
     if (byPlayer && this.player) {
@@ -339,13 +394,11 @@ export class Game {
       }
     }
 
-    if (b.isNemesis) {
-      this.nemesis = null;
-      this.nemesisRetry = rand(2.5, 4.5);   // the director sends another hunter
-      if (byPlayer) {
-        this.ui.announce('NEMESIS DOWN — BUT THEY KNOW WHERE YOU ARE', { danger: true, dur: 2400 });
-        this.player.ch.emote();
-      }
+    if (b.hunter) {
+      // the director quietly hands the job to someone else
+      const hi = this.hunters.indexOf(b);
+      if (hi >= 0) this.hunters.splice(hi, 1);
+      if (this.director.phase === 'strike') this.hunterRefill = Math.min(this.hunterRefill || 9, rand(1, 2));
     }
 
     const idx = this.bots.indexOf(b);
@@ -359,7 +412,7 @@ export class Game {
       b.ch.vel.set(0, 0, 0);
       this.corpses.push({ ch: b.ch, ttl: 2.8 });
     }
-    if (!b.isNemesis) this.pendingRespawns.push(rand(1.5, 4));
+    this.pendingRespawns.push(rand(1.5, 4));
   }
 
   // Which death clip fits: flung/burned/shattered bodies fly back; melee
@@ -399,7 +452,7 @@ export class Game {
       switchesLeft: CONFIG.SWITCHES_PER_GAME,
       cds: {}, flying: false,
       speedUntil: 0, invisUntil: 0, disguiseUntil: 0, xrayUntil: 0,
-      absorbUntil: 0, twoUntil: 0, enlargeUntil: 0, landingUntil: 0,
+      absorbUntil: 0, twoUntil: 0, enlargeUntil: 0, landingUntil: 0, ambushUntil: 0,
       fireballArmed: false, flameUntil: 0,
       invulnUntil: now() + 2, adrenalineReady: now(),
       kills: 0, tokens: 0,
@@ -409,8 +462,7 @@ export class Game {
     ch.hp = CONFIG.PLAYER_HP;
 
     this.state = 'playing';
-    this.nemesis = null;
-    this.nemesisRetry = 0;
+    this.clearHunters();
     this.camYaw = ch.yaw + Math.PI;
     this.ui.showHUD(this.controls.isTouch);
     this.ui.setSwitches(this.player.switchesLeft);
@@ -427,7 +479,7 @@ export class Game {
 
   playerHidden() {
     if (!this.player) return false;
-    return this.player.invisUntil > now() || this.player.disguiseUntil > now();
+    return this.player.invisUntil > now() || !!this.player.ch.propMesh;
   }
 
   setPlayerPower(power) {
@@ -464,6 +516,7 @@ export class Game {
 
     if (P.fireballArmed) { this.launchFireball(); return; }
     if (ch.attacking) return;   // one swing at a time — archetype speed sets the cadence
+    if (ch.propMesh) this.revealDisguise(true);   // the "prop" springs to life
 
     // aim the swing where the camera looks
     ch.yaw = this.camYaw;
@@ -492,12 +545,11 @@ export class Game {
       if (d > 1.2 && dot < h.arc) continue;
       hitAny = true;
 
-      const disguiseStrike = P.disguiseUntil > now();
+      const ambush = P.ambushUntil > now();   // struck from a prop disguise: one-shot
       const giant = scale > 1.5;
       if (b.ch.frozen) { this.killBot(b, { byPlayer: true, cause: 'shatter' }); continue; }
-      if (disguiseStrike || giant) {
+      if (ambush || giant) {
         this.killBot(b, { byPlayer: true });
-        if (disguiseStrike) this.revealDisguise();
         continue;
       }
       b.hp -= h.damage;
@@ -507,12 +559,14 @@ export class Game {
       SFX.punch();
       if (b.hp <= 0) this.killBot(b, { byPlayer: true });
       else {
+        this.bam(b.ch.pos.x, 1.5 + b.ch.altitude, b.ch.pos.z, 'hit');
         const k = (0.6 + h.damage * 0.012) / (d || 1);
         b.ch.pos.x += dx * k; b.ch.pos.z += dz * k;
         if (Math.random() < 0.5) { b.target = 'player'; b.aggressive = true; }
       }
     }
     if (hitAny) this.fx.addShake(0.12);
+    if (P.ambushUntil) P.ambushUntil = 0;
   }
 
   launchFireball() {
@@ -534,19 +588,36 @@ export class Game {
       pr.pos.addScaledVector(pr.dir, pr.speed * dt);
       this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 6, color: 0xff7a3c, speed: 2.5, life: 0.45, size: 2.6, gravity: 2, jitter: 0.35 });
       this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 2, color: 0xffd166, speed: 2, life: 0.3, size: 2 });
+      const fromBot = pr.owner === 'bot';
+      if (fromBot && pr.homing && this.player?.ch.alive) {
+        // hunters' fireballs curve toward the player so a dodge isn't free
+        const to = this._v1.set(this.player.ch.pos.x, 1.2 + this.player.ch.altitude, this.player.ch.pos.z).sub(pr.pos).normalize();
+        pr.dir.lerp(to, Math.min(1, pr.homing * dt)).normalize();
+      }
       const hitWall = this.world.isBlocked(pr.pos.x, pr.pos.z, 0.5) && this.world.buildingHeightAt(pr.pos.x, pr.pos.z) > pr.pos.y;
       let hitBot = false;
-      for (const b of this.bots) {
-        if (b.ch.alive && !b.held && b.ch.pos.distanceTo(pr.pos) < 1.6) { hitBot = true; break; }
+      if (!fromBot) {
+        for (const b of this.bots) {
+          if (b.ch.alive && !b.held && b.ch.pos.distanceTo(pr.pos) < 1.6) { hitBot = true; break; }
+        }
       }
-      if (pr.life <= 0 || hitWall || hitBot) {
+      const hitPlayer = fromBot && this.player?.ch.alive &&
+        this._v1.set(this.player.ch.pos.x, 1.2 + this.player.ch.altitude, this.player.ch.pos.z).distanceTo(pr.pos) < 1.8;
+      if (pr.life <= 0 || hitWall || hitBot || hitPlayer) {
         SFX.explosion();
         this.fx.addShake(0.8);
         this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 60, color: 0xff7a3c, speed: 14, life: 0.9, size: 3, gravity: -2 });
         this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 30, color: 0xffd166, speed: 10, life: 0.7, size: 2.2 });
         this.fx.ring(pr.pos.x, pr.pos.z, { color: 0xff7a3c, maxR: 8, dur: 0.6 });
+        this.bam(pr.pos.x, pr.pos.y + 0.5, pr.pos.z, 'boom', 1.2);
         for (const b of [...this.bots]) {
-          if (b.ch.alive && b.ch.pos.distanceTo(pr.pos) < 7.5) this.killBot(b, { byPlayer: true, cause: 'fire' });
+          if (b.ch.alive && b !== pr.bot && b.ch.pos.distanceTo(pr.pos) < 7.5) {
+            this.killBot(b, fromBot ? { byBot: pr.bot, cause: 'fire' } : { byPlayer: true, cause: 'fire' });
+          }
+        }
+        if (fromBot && this.player?.ch.alive) {
+          const dP = this._v1.set(this.player.ch.pos.x, 1.2 + this.player.ch.altitude, this.player.ch.pos.z).distanceTo(pr.pos);
+          if (dP < 6) this.damagePlayer(dP < 2.5 ? 999 : 60, pr.bot);
         }
         this.projectiles.splice(i, 1);
       }
@@ -575,6 +646,7 @@ export class Game {
     const P = this.player, ch = P.ch;
     const t = now();
     if ((P.cds[power.id] || 0) > t) return;
+    if (ch.propMesh && power.id !== 'shapeshift') this.revealDisguise();   // using a power blows the cover
 
     const px = ch.pos.x, pz = ch.pos.z, py = 1.2 + ch.altitude;
     let used = true;
@@ -600,7 +672,7 @@ export class Game {
         P.invisUntil = t + 5;
         SFX.invis();
         this.fx.emit(px, py, pz, { count: 24, color: 0xbfc7de, speed: 4, life: 0.6, size: 1.6 });
-        for (const b of this.bots) if (b.target === 'player' && !b.isNemesis) b.target = null;
+        for (const b of this.bots) if (b.target === 'player' && !(b.hunter && this.director.phase === 'strike')) b.target = null;
         break;
       }
       case 'pyro': {
@@ -647,14 +719,19 @@ export class Game {
         break;
       }
       case 'shapeshift': {
-        P.disguiseUntil = t + 8;
+        // become scenery: nobody notices a bin until it moves
+        if (ch.propMesh || P.flying || P.tk) { used = false; break; }
+        P.disguiseUntil = t + 90;   // safety cap; moving ends it sooner
         SFX.morph();
         this.fx.emit(px, py, pz, { count: 30, color: 0xff9de2, speed: 5, life: 0.7, size: 1.8 });
         ch.setOpacity(1);
-        // wear another hero's face: borrow a random lobby archetype
-        const others = POWERS.filter((p) => p.id !== P.powerMain.id);
-        ch.disguiseAs(pick(others).id);
-        for (const b of this.bots) if (b.target === 'player' && !b.isNemesis) b.target = null;
+        const pitch = CONFIG.BLOCK + CONFIG.ROAD;
+        const kind = pick(this.world.themeAt(Math.round(px / pitch), Math.round(pz / pitch)) === 'suburb'
+          ? ['bin', 'mailbox', 'bush', 'hydrant', 'tree', 'bench']
+          : ['bin', 'bench', 'hydrant', 'lamppost', 'car']);
+        ch.disguiseAsProp(this.world.makePropMesh(kind));
+        ch.vel.set(0, 0, 0);
+        for (const b of this.bots) if (b.target === 'player') b.target = null;
         break;
       }
       case 'duplication': {
@@ -682,12 +759,12 @@ export class Game {
     const t = now();
     if (P.tk || (P.cds[power.id] || 0) > t) return;
     const ch = P.ch;
+    if (ch.propMesh) this.revealDisguise();
 
     // nearest bot or liftable prop in range
     let kind = null, bot = null, prop = null, bestD = CONFIG.TK_RANGE;
     for (const b of this.bots) {
       if (!b.ch.alive || b.held || b.ch.frozen) continue;
-      if (b.isNemesis) continue;                       // the nemesis resists
       const d = b.ch.pos.distanceTo(ch.pos);
       if (d < bestD) { bot = b; bestD = d; kind = 'bot'; }
     }
@@ -698,9 +775,6 @@ export class Game {
     if (!kind) {
       // fizzle — nothing to grab
       this.fx.emit(ch.pos.x, 1.6, ch.pos.z, { count: 8, color: TK_COLOR, speed: 2, life: 0.4 });
-      if (this.nemesis && this.nemesis.ch.pos.distanceTo(ch.pos) < CONFIG.TK_RANGE) {
-        this.ui.announce('THEY RESIST YOUR GRIP', { danger: true, dur: 1400 });
-      }
       return;
     }
 
@@ -885,11 +959,15 @@ export class Game {
     }
   }
 
-  revealDisguise() {
+  revealDisguise(ambush = false) {
     const P = this.player, ch = P.ch;
+    if (!ch.propMesh && !ch.disguise) return;
     P.disguiseUntil = 0;
     ch.undisguise();
     this.fx.emit(ch.pos.x, 1.4, ch.pos.z, { count: 18, color: 0xff9de2, speed: 5, life: 0.5 });
+    SFX.morph();
+    // bursting out of a disguise at someone drops them in one blow
+    if (ambush) P.ambushUntil = now() + 1.2;
   }
 
   superheroLanding() {
@@ -902,6 +980,7 @@ export class Game {
     this.fx.ring(ch.pos.x, ch.pos.z, { color: 0xffd166, maxR: 9, dur: 0.7 });
     this.fx.ring(ch.pos.x, ch.pos.z, { color: 0xffffff, maxR: 5, dur: 0.5 });
     this.fx.emit(ch.pos.x, 0.6, ch.pos.z, { count: 60, color: 0xffd166, speed: 12, life: 0.8, size: 2.2 });
+    this.bam(ch.pos.x, 1.6, ch.pos.z, 'boom', 1.3);
     for (const b of [...this.bots]) {
       if (b.ch.alive && b.ch.pos.distanceTo(ch.pos) < 8.5) this.killBot(b, { byPlayer: true });
     }
@@ -954,9 +1033,12 @@ export class Game {
     SFX.hurt();
     this.fx.addShake(0.3);
     this.fx.emit(P.ch.pos.x, 1.4 + P.ch.altitude, P.ch.pos.z, { count: 8, color: 0xff5470, speed: 4, life: 0.4 });
+    if (P.ch.propMesh) this.revealDisguise();   // a bin that says "oof" is no longer a bin
+    if (P.ch.hp > 0) this.bam(P.ch.pos.x, 1.6 + P.ch.altitude, P.ch.pos.z, 'hurt');
 
     if (P.ch.hp <= 0) {
-      if (byBot?.isNemesis) {
+      if (byBot?.hunter && this.director.phase === 'strike') {
+        this.bam(P.ch.pos.x, 1.6 + P.ch.altitude, P.ch.pos.z, 'kill', 1.4);
         this.playerDeath(byBot);
         return;
       }
@@ -978,27 +1060,131 @@ export class Game {
     }
   }
 
-  sendNemesis() {
-    const power = counterPowerFor(this.player.powerMain.id);
-    const p = this.player.ch.pos;
-    const ang = this.camYaw + rand(-0.9, 0.9);
-    let sx = p.x - Math.sin(ang) * 30, sz = p.z - Math.cos(ang) * 30;
-    if (this.world.isBlocked(sx, sz)) {
-      const o = this.world.randomOpenPos(p, 20, 35);
-      sx = o.x; sz = o.z;
+  // ================= THE HUNT =================
+  // The director never announces itself. As the total nears the target a
+  // couple of nearby bots are told to hang around the player; when it lands,
+  // they attack like any aggressive bot would — only tougher, faster, and
+  // not fooled by disguises. If the player keeps slipping away the pressure
+  // escalates (fireballs, enlarged reinforcements, finally blinking in).
+
+  // A spot near the player but out of the camera's view.
+  hiddenSpotNear(p, minR, maxR) {
+    for (let i = 0; i < 8; i++) {
+      const ang = this.camYaw + Math.PI + rand(-1.3, 1.3);   // behind the camera
+      const r = rand(minR, maxR);
+      const x = p.x - Math.sin(ang) * r, z = p.z - Math.cos(ang) * r;
+      if (!this.world.isBlocked(x, z, 0.9)) return { x, z };
     }
-    const b = this.spawnBot({ pos: { x: sx, z: sz } });
-    b.isNemesis = true;
-    b.aggressive = true;
-    b.power = power;
-    b.ch.setPower(power);
-    b.ch.setNemesisLook();
-    b.score = rand(120, 600);
-    this.nemesis = b;
-    this.ui.vignette(true);
-    this.ui.announce(`${power.emblem} ${b.ch.name} HAS YOUR SCENT`, { danger: true, dur: 2600 });
-    SFX.nemesis();
-    this.fx.addShake(0.4);
+    return this.world.randomOpenPos(p, minR, maxR);
+  }
+
+  assignHunters(n) {
+    if (!this.player) return;
+    const pp = this.player.ch.pos;
+    const counter = counterPowerFor(this.player.powerMain.id);
+    const cands = this.bots
+      .filter((b) => b.ch.alive && !b.hunter && !b.held)
+      .map((b) => ({ b, d: b.ch.pos.distanceTo(pp) - (b.power.id === counter.id ? 12 : 0) }))
+      .filter((c) => c.d < 70)
+      .sort((a, b) => a.d - b.d);
+    while (this.hunters.length < n) {
+      let b = cands.shift()?.b;
+      if (!b) {
+        const s = this.hiddenSpotNear(pp, 22, 40);
+        b = this.spawnBot({ pos: s });
+        if (Math.random() < 0.6) { b.power = counter; b.ch.setPower(counter); }
+      }
+      b.hunter = true;
+      b.aggressive = true;
+      b.stalkCd = 0;
+      b.farT = 0;
+      b.target = null;
+      this.hunters.push(b);
+    }
+  }
+
+  beginStrike() {
+    this.strikeT = 0;
+    this.hunterFireCd = 1.5;
+    this.assignHunters(CONFIG.HUNTER_COUNT);
+    for (const b of this.hunters) this.armHunter(b);
+  }
+
+  armHunter(b) {
+    b.hp = Math.max(b.hp, CONFIG.HUNTER_HP);
+    b.target = 'player';
+    b.attackCd = Math.min(b.attackCd, 0.3);
+    if (this.strikeT > CONFIG.HUNTER_GIANT_AT) b.ch.scaleTarget = 2.0;
+  }
+
+  relocateHunter(b, blink) {
+    const p = this.player.ch.pos;
+    const s = blink ? this.world.randomOpenPos(p, 3, 6) : this.hiddenSpotNear(p, 14, 22);
+    if (blink) {
+      this.fx.emit(b.ch.pos.x, 1.2, b.ch.pos.z, { count: 14, color: 0x7dffca, speed: 5, life: 0.4 });
+      SFX.teleport();
+    }
+    b.ch.pos.set(s.x, 0, s.z);
+    b.ch.altitude = this.player.ch.altitude > 2 ? this.player.ch.altitude : 0;
+    if (blink) this.fx.emit(s.x, 1.2, s.z, { count: 14, color: 0x7dffca, speed: 5, life: 0.4 });
+  }
+
+  updateHunt(dt) {
+    if (this.director.phase !== 'strike' || !this.player?.ch.alive) return;
+    this.strikeT += dt;
+    const P = this.player, pp = P.ch.pos;
+
+    // keep the pressure on: replace fallen hunters, add muscle over time
+    this.hunters = this.hunters.filter((b) => b.ch.alive);
+    const want = CONFIG.HUNTER_COUNT + (this.strikeT > CONFIG.HUNTER_GIANT_AT ? 2 : 0);
+    if (this.hunters.length < want) {
+      this.hunterRefill -= dt;
+      if (this.hunterRefill <= 0) {
+        this.hunterRefill = 1.5;
+        const before = this.hunters.length;
+        this.assignHunters(Math.min(want, before + 1));
+        for (const b of this.hunters.slice(before)) this.armHunter(b);
+      }
+    }
+    if (this.strikeT > CONFIG.HUNTER_GIANT_AT) {
+      for (const b of this.hunters) if (b.ch.scaleTarget < 2) b.ch.scaleTarget = 2.0;
+    }
+
+    // ranged pressure once the chase drags on
+    if (this.strikeT > CONFIG.HUNTER_FIREBALL_AT) {
+      this.hunterFireCd -= dt;
+      if (this.hunterFireCd <= 0) {
+        const shooter = this.hunters.find((b) => {
+          const d = b.ch.pos.distanceTo(pp);
+          return d > 4 && d < 30 && !b.ch.attacking;
+        });
+        if (shooter) {
+          this.hunterFireCd = rand(2.2, 3.5);
+          this.botFireball(shooter);
+        }
+      }
+    }
+  }
+
+  botFireball(b) {
+    const P = this.player;
+    const from = b.ch.pos.clone().setY(1.4 + b.ch.altitude);
+    const to = P.ch.pos.clone().setY(1.2 + P.ch.altitude);
+    const dir = to.sub(from).normalize();
+    b.ch.yaw = Math.atan2(dir.x, dir.z);
+    b.ch.cast('pyro');
+    SFX.fireball();
+    this.projectiles = this.projectiles || [];
+    this.projectiles.push({ pos: from, dir, speed: 22, life: 2.4, r: 0, owner: 'bot', bot: b, homing: 2.2 });
+  }
+
+  clearHunters() {
+    for (const b of this.bots) {
+      if (b.hunter) { b.hunter = false; b.hp = Math.min(b.hp, 100); b.ch.scaleTarget = 1; b.target = null; }
+    }
+    this.hunters = [];
+    this.strikeT = 0;
+    this.hunterRefill = 0;
   }
 
   playerDeath(killer) {
@@ -1013,7 +1199,6 @@ export class Game {
     this.deathKiller = killer;
     this.controls.setEnabled(false);
     this.ui.closeSwitch();
-    this.ui.vignette(false);
     this.timescale = 0.3;
     this.slowmoUntil = performance.now() / 1000 + 2.0;
     SFX.death();
@@ -1058,8 +1243,7 @@ export class Game {
     for (const c of this.corpses) c.ch.dispose();
     this.corpses = [];
     if (this.player) { this.player.ch.dispose(); this.player = null; }
-    if (this.nemesis) { this.killBot(this.nemesis, { silent: true }); this.nemesis = null; }
-    this.nemesisRetry = 0;
+    this.clearHunters();
     for (const c of this.clones) c.ch.dispose();
     this.clones = [];
     this.state = 'menu';
@@ -1083,6 +1267,9 @@ export class Game {
     const mx = -input.moveX * cos + input.moveZ * sin;
     const mz = input.moveX * sin + input.moveZ * cos;
     const moving = Math.hypot(mx, mz) > 0.05;
+
+    // a disguised prop that moves is just a hero again
+    if (ch.propMesh && moving) this.revealDisguise();
 
     ch.vel.set(mx * spd, 0, mz * spd);
     ch.pos.x += ch.vel.x * dt;
@@ -1149,7 +1336,7 @@ export class Game {
 
     // timed effects wearing off
     ch.setOpacity(P.invisUntil > t ? 0.15 : 1);
-    if (P.disguiseUntil > 0 && P.disguiseUntil < t && ch.disguise) this.revealDisguise();
+    if (P.disguiseUntil > 0 && P.disguiseUntil < t && (ch.disguise || ch.propMesh)) this.revealDisguise();
     if (P.xrayUntil > 0 && P.xrayUntil < t) {
       P.xrayUntil = 0;
       this.world.setXray(false);
@@ -1180,8 +1367,8 @@ export class Game {
     // giant crush: walking over bots while enlarged
     if (ch.curScale > 1.5) {
       for (const b of [...this.bots]) {
-        if (b.ch.alive && !b.isNemesis && !b.held && b.ch.pos.distanceTo(ch.pos) < 1.9 * ch.curScale && b.ch.altitude < 2) {
-          this.killBot(b, { byPlayer: true });
+        if (b.ch.alive && !b.held && b.ch.curScale < 1.5 && b.ch.pos.distanceTo(ch.pos) < 1.9 * ch.curScale && b.ch.altitude < 2) {
+          this.killBot(b, { byPlayer: true, cause: 'squish' });
           this.fx.addShake(0.3);
         }
       }
@@ -1207,7 +1394,7 @@ export class Game {
         c.repath = 1;
         let best = null, bestD = 26;
         for (const b of this.bots) {
-          if (!b.ch.alive || b.isNemesis || b.held) continue;
+          if (!b.ch.alive || b.held) continue;
           const d = c.ch.pos.distanceTo(b.ch.pos);
           if (d < bestD) { best = b; bestD = d; }
         }
@@ -1316,7 +1503,6 @@ export class Game {
 
   leaderboardRows() {
     const entries = this.bots
-      .filter((b) => !b.isNemesis)
       .map((b) => ({ name: b.ch.name, score: b.score * this.director.bet * 0.02 + b.score, me: false }));
     if (this.player && this.state !== 'menu') {
       entries.push({ name: 'You', score: this.director.total, me: true });
@@ -1346,12 +1532,12 @@ export class Game {
       this.pendingRespawns[i] -= dt;
       if (this.pendingRespawns[i] <= 0) {
         this.pendingRespawns.splice(i, 1);
-        if (this.bots.length < CONFIG.BOT_COUNT + (this.nemesis ? 1 : 0)) this.spawnBot({});
+        if (this.bots.length < CONFIG.BOT_COUNT + (this.director.phase === 'strike' ? 2 : 0)) this.spawnBot({});
       }
     }
     if (Math.random() < dt * 2 && this.bots.length) {
       const b = pick(this.bots);
-      if (!b.isNemesis) b.score += rand(0.5, 4);
+      b.score += rand(0.5, 4);
     }
 
     this.collectibles.update(dt, this.time);
@@ -1369,11 +1555,10 @@ export class Game {
       this.updateClones(dt);
 
       // the director decides when your story ends
-      if (this.director.update(dt) && !this.nemesis) this.sendNemesis();
-      if (this.director.phase === 'nemesis' && !this.nemesis) {
-        this.nemesisRetry -= dt;
-        if (this.nemesisRetry <= 0) this.sendNemesis();
-      }
+      const ev = this.director.update(dt);
+      if (ev === 'stalk') this.assignHunters(CONFIG.HUNTER_COUNT);
+      else if (ev === 'strike') this.beginStrike();
+      this.updateHunt(dt);
 
       this.updateCameraPlay(dt, input);
 
@@ -1394,7 +1579,7 @@ export class Game {
         if (P.landingUntil > t) buffs.push({ emblem: '💥', label: Math.ceil(P.landingUntil - t) + 's' });
         if (P.fireballArmed) buffs.push({ emblem: '☄', label: 'armed' });
         if (P.invisUntil > t) buffs.push({ emblem: '👁', label: Math.ceil(P.invisUntil - t) + 's' });
-        if (P.disguiseUntil > t) buffs.push({ emblem: '🎭', label: Math.ceil(P.disguiseUntil - t) + 's' });
+        if (P.ch.propMesh) buffs.push({ emblem: '🎭', label: 'hidden' });
         if (P.tk) buffs.push({ emblem: '🔮', label: 'hold' });
         this.ui.setBuffs(buffs);
       }

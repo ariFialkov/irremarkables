@@ -735,9 +735,55 @@ export class World {
     return { mesh, type, radius, alive: true, busy: false, x, z };
   }
 
-  spawnCar(liftables, x, z, ry) {
-    const bodyColor = pick([0xc23a3a, 0x3a66c2, 0xd8d8dc, 0x2e2e34, 0x3aa66a, 0xd9a51f, 0x8446b8, 0xe8e4da]);
+  // Geometry for a standalone prop (liftables, and the shapeshifter's disguises).
+  propGeos(kind) {
     const g = [];
+    if (kind === 'car') {
+      const bodyColor = pick([0xc23a3a, 0x3a66c2, 0xd8d8dc, 0x2e2e34, 0x3aa66a, 0xd9a51f, 0x8446b8, 0xe8e4da]);
+      this.carGeos(g, bodyColor);
+    } else if (kind === 'bin') {
+      cylinder(g, 0.45, 0.4, 1.0, 10, 0, 0.5, 0, pick([0x3f6e4a, 0x555b63, 0x6e3f3f]));
+      cylinder(g, 0.5, 0.5, 0.1, 10, 0, 1.02, 0, 0x2e343c);
+    } else if (kind === 'bench') {
+      box(g, 2.2, 0.12, 0.55, 0, 0.5, 0, 0x8a6642);
+      box(g, 2.2, 0.5, 0.1, 0, 0.85, -0.25, 0x8a6642);
+      box(g, 0.12, 0.5, 0.5, -0.95, 0.25, 0, 0x3a4048);
+      box(g, 0.12, 0.5, 0.5, 0.95, 0.25, 0, 0x3a4048);
+    } else if (kind === 'mailbox') {
+      box(g, 0.09, 1.0, 0.09, 0, 0.5, 0, 0x5a4634);
+      box(g, 0.34, 0.24, 0.5, 0, 1.1, 0, pick([0x9a3030, 0x3a66c2, 0x3a3d42]));
+    } else if (kind === 'hydrant') {
+      cylinder(g, 0.16, 0.2, 0.8, 8, 0, 0.4, 0, 0xc23a3a);
+      cylinder(g, 0.12, 0.12, 0.14, 8, 0, 0.87, 0, 0xc23a3a);
+      box(g, 0.5, 0.12, 0.14, 0, 0.5, 0, 0xc23a3a);
+    } else if (kind === 'bush') {
+      const c = pick([0x3f7a30, 0x4f8f3a, 0x5da245]);
+      blob(g, 0.6, 0, 0.55, 0, c);
+      blob(g, 0.45, 0.4, 0.45, 0.2, c);
+      blob(g, 0.4, -0.35, 0.5, -0.2, c);
+    } else if (kind === 'lamppost') {
+      cylinder(g, 0.07, 0.1, 4.6, 6, 0, 2.3, 0, 0x3a4048);
+      box(g, 1.1, 0.12, 0.25, 0.45, 4.6, 0, 0x3a4048);
+      box(g, 0.4, 0.15, 0.3, 0.9, 4.52, 0, 0xfff2c9, { shade: 0 });
+    } else {
+      // small tree
+      const s = 0.8;
+      cylinder(g, 0.16 * s, 0.26 * s, 2.1 * s, 6, 0, 1.05 * s, 0, 0x6b4a32);
+      const canopy = pick([0x4f8f3a, 0x5da245, 0x3f7a30]);
+      blob(g, 1.15 * s, 0, 2.6 * s, 0, canopy);
+      blob(g, 0.8 * s, 0.7 * s, 2.1 * s, 0.3 * s, canopy);
+      blob(g, 0.7 * s, -0.6 * s, 2.3 * s, -0.4 * s, canopy);
+    }
+    return g;
+  }
+
+  makePropMesh(kind) {
+    const mesh = new THREE.Mesh(mergeGeometries(this.propGeos(kind), false), this.vcMat);
+    mesh.castShadow = RUNTIME.shadows;
+    return mesh;
+  }
+
+  carGeos(g, bodyColor) {
     box(g, 1.9, 0.5, 4.1, 0, 0.62, 0, bodyColor, { shade: 0.03 });
     // hood + trunk slope hint
     box(g, 1.8, 0.16, 0.9, 0, 0.92, 1.5, bodyColor, { shade: 0.03 });
@@ -757,25 +803,20 @@ export class World {
       wg.translate(wx, 0.34, wz);
       g.push(paint(wg, 0x1c1e24));
     }
-    const l = this.makeLiftable(g, x, z, 'car', 2.1);
+  }
+
+  spawnCar(liftables, x, z, ry) {
+    const l = this.makeLiftable(this.propGeos('car'), x, z, 'car', 2.1);
     l.mesh.rotation.y = ry + (Math.random() < 0.5 ? Math.PI : 0);
     liftables.push(l);
   }
 
   spawnBin(liftables, x, z) {
-    const g = [];
-    cylinder(g, 0.45, 0.4, 1.0, 10, 0, 0.5, 0, pick([0x3f6e4a, 0x555b63, 0x6e3f3f]));
-    cylinder(g, 0.5, 0.5, 0.1, 10, 0, 1.02, 0, 0x2e343c);
-    liftables.push(this.makeLiftable(g, x, z, 'bin', 0.8));
+    liftables.push(this.makeLiftable(this.propGeos('bin'), x, z, 'bin', 0.8));
   }
 
   spawnBench(liftables, x, z, ry) {
-    const g = [];
-    box(g, 2.2, 0.12, 0.55, 0, 0.5, 0, 0x8a6642);
-    box(g, 2.2, 0.5, 0.1, 0, 0.85, -0.25, 0x8a6642);
-    box(g, 0.12, 0.5, 0.5, -0.95, 0.25, 0, 0x3a4048);
-    box(g, 0.12, 0.5, 0.5, 0.95, 0.25, 0, 0x3a4048);
-    const l = this.makeLiftable(g, x, z, 'bench', 1.4);
+    const l = this.makeLiftable(this.propGeos('bench'), x, z, 'bench', 1.4);
     l.mesh.rotation.y = ry;
     liftables.push(l);
   }

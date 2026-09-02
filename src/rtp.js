@@ -5,9 +5,12 @@ import { rand } from './utils.js';
 // a target payout multiplier from a bracketed distribution whose expected
 // value is normalized to exactly CONFIG.RTP. The player accrues winnings
 // through play; the moment their total reaches the target, the director
-// dispatches a nemesis — a bot carrying a counter-power — to end the round.
-// The payout always lands on the target, so the long-run return trends to
-// the configured RTP while every round still looks and feels skill-driven.
+// has a couple of ordinary-looking bots close in on the player and take them
+// out. The payout always lands on the target, so the long-run return trends
+// to the configured RTP while every round still looks and feels skill-driven.
+//
+// Phases: playing -> stalk (total nearing the target: hunters drift toward
+// the player) -> strike (target reached: the hunters attack) -> done.
 
 function bracketsMean() {
   let mean = 0;
@@ -33,8 +36,8 @@ export class Director {
     this.bet = 0;
     this.targetMult = 1;
     this.total = 0;          // player's accrued winnings this round ($)
-    this.phase = 'idle';     // idle | playing | nemesis | done
-    this.nemesisDelay = 0;   // small dramatic pause before dispatch
+    this.phase = 'idle';     // idle | playing | stalk | strike | done
+    this.strikeDelay = 0;    // short beat between hitting the target and the ambush
   }
 
   startRound(bet) {
@@ -42,16 +45,17 @@ export class Director {
     this.targetMult = sampleTargetMultiplier();
     this.total = 0;
     this.phase = 'playing';
-    this.nemesisDelay = rand(0.8, 2.2);
+    this.strikeDelay = rand(1.0, 2.5);
   }
 
   get target() { return this.bet * this.targetMult; }
   get mult() { return this.bet > 0 ? this.total / this.bet : 0; }
+  get live() { return this.phase === 'playing' || this.phase === 'stalk' || this.phase === 'strike'; }
 
   // Add winnings, clamped so the total can never overshoot the scripted
   // payout — the last pickup/kill lands exactly on target.
   addWinnings(amount) {
-    if (this.phase !== 'playing' && this.phase !== 'nemesis') return 0;
+    if (!this.live) return 0;
     const room = Math.max(0, this.target - this.total);
     const gain = Math.min(amount, room);
     this.total += gain;
@@ -59,18 +63,23 @@ export class Director {
   }
 
   get targetReached() { return this.total >= this.target - 1e-9; }
+  get stalkReached() { return this.total >= this.target * CONFIG.STALK_FRACTION; }
 
-  // Called each frame while playing; returns true exactly once when it is
-  // time to send the nemesis after the target has been hit.
+  // Called each frame while live. Returns 'stalk' once when the hunters
+  // should start closing in, 'strike' once when they should attack, else null.
   update(dt) {
-    if (this.phase === 'playing' && this.targetReached) {
-      this.nemesisDelay -= dt;
-      if (this.nemesisDelay <= 0) {
-        this.phase = 'nemesis';
-        return true;
+    if (this.phase === 'playing' && this.stalkReached) {
+      this.phase = 'stalk';
+      return 'stalk';
+    }
+    if ((this.phase === 'stalk' || this.phase === 'playing') && this.targetReached) {
+      this.strikeDelay -= dt;
+      if (this.strikeDelay <= 0) {
+        this.phase = 'strike';
+        return 'strike';
       }
     }
-    return false;
+    return null;
   }
 
   endRound() {
