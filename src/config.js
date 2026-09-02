@@ -80,8 +80,8 @@ export const CONFIG = {
   ],
   // Potion spawn probabilities (must sum to 1)
   POTIONS: [
-    { id: 'enlarge', name: 'Enlarge', emblem: '\u{1F9B9}', p: 0.40, duration: 15 },
-    { id: 'fireball', name: 'Fireball', emblem: '\u{2604}', p: 0.40, duration: 0 },
-    { id: 'landing', name: 'Superhero Landing', emblem: '\u{1F4A5}', p: 0.20, duration: 0 },
+    { id: 'enlarge', name: 'Enlarge', emblem: '\u{1F9B9}', p: 1 / 3, duration: 15 },
+    { id: 'fireball', name: 'Fireball', emblem: '\u{2604}', p: 1 / 3, duration: 0 },
+    { id: 'landing', name: 'Superhero Landing', emblem: '\u{1F4A5}', p: 1 / 3, duration: 0 },
   ],
 };
