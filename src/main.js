@@ -7,7 +7,11 @@ const loading = document.getElementById('loading');
 
 async function boot() {
   try {
-    await loadAnimLib('./anims.json');
+    // the comic display font is drawn into canvas textures (impact words), so wait for it
+    await Promise.all([
+      loadAnimLib('./anims.json'),
+      document.fonts?.load('96px Bangers').catch(() => {}),
+    ]);
   } catch (e) {
     loading.textContent = 'Failed to load animations: ' + e.message;
     throw e;

@@ -3,6 +3,7 @@ import { CONFIG } from './config.js';
 import { POWERS, counterPowerFor } from './powers.js';
 import { World } from './world.js';
 import { FX } from './fx.js';
+import { BamText } from './bam.js';
 import { Collectibles } from './collectibles.js';
 import { Character } from './entities.js';
 import { Director } from './rtp.js';
@@ -26,14 +27,14 @@ const BAM_WORDS = {
   squish: ['SQUISH!', 'SPLAT!', 'CRUNCH!'],
 };
 const BAM_STYLE = {
-  hit: { color: '#ffe45c', burst: '#ff3b3b', size: 1 },
-  kill: { color: '#ffffff', burst: '#ff2038', size: 1.3 },
-  fire: { color: '#ffd166', burst: '#ff6a1a', size: 1.4 },
-  shatter: { color: '#e9fbff', burst: '#3fb7ff', size: 1.2 },
-  slam: { color: '#ffe45c', burst: '#8a3dff', size: 1.3 },
-  hurt: { color: '#ffb3c0', burst: '#7a1a2a', size: 0.9 },
-  boom: { color: '#ffffff', burst: '#ff9a1a', size: 1.6 },
-  squish: { color: '#d9ffb3', burst: '#3fa64a', size: 1.2 },
+  hit: { size: 1 },
+  kill: { size: 1.35 },
+  fire: { size: 1.45 },
+  shatter: { size: 1.25 },
+  slam: { size: 1.35 },
+  hurt: { size: 0.9 },
+  boom: { size: 1.7 },
+  squish: { size: 1.25 },
 };
 
 export class Game {
@@ -58,6 +59,7 @@ export class Game {
 
     this.world = new World(this.scene);
     this.fx = new FX(this.scene);
+    this.bams = new BamText(this.scene);
     this.collectibles = new Collectibles(this.scene, this.world);
     this.ui = new UI();
     this.controls = new Controls(canvas);
@@ -129,13 +131,12 @@ export class Game {
   // ---- comic impact words ----
   bam(x, y, z, kind, sizeMul = 1) {
     const dc = Math.hypot(x - this.camPos.x, z - this.camPos.z);
-    if (dc > 48) return;
-    const s = this.project(this._v1.set(x, y, z));
-    if (!s || s.x < -40 || s.y < -40 || s.x > this.canvas.clientWidth + 40 || s.y > this.canvas.clientHeight + 40) return;
+    if (dc > 55) return;
     const st = BAM_STYLE[kind] || BAM_STYLE.hit;
-    const far = clamp(1.25 - dc / 40, 0.55, 1);
-    this.ui.bam(s.x + rand(-14, 14), s.y + rand(-10, 10), pick(BAM_WORDS[kind] || BAM_WORDS.hit),
-      { color: st.color, burst: st.burst, size: st.size * sizeMul * far });
+    // words are world-sized sprites: slightly larger far away so they stay readable
+    const far = clamp(0.8 + dc / 30, 0.8, 1.9);
+    this.bams.spawn(x + rand(-0.25, 0.25), y + rand(-0.1, 0.25), z + rand(-0.25, 0.25), pick(BAM_WORDS[kind] || BAM_WORDS.hit),
+      { size: st.size * sizeMul * far, camPos: this.camPos });
   }
 
   // ================= BOTS =================
@@ -1546,6 +1547,7 @@ export class Game {
     this.processHits();
     this.updateCorpses(dt);
     this.fx.update(dt);
+    this.bams.update(dt);
 
     const input = this.controls.poll();
 

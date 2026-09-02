@@ -317,31 +317,6 @@ html, body {
 }
 @keyframes annin { from { transform: translateX(-50%) rotate(-2deg) scale(2.2); opacity: 0; } }
 
-/* comic onomatopoeia burst */
-.bam {
-  position: absolute; pointer-events: none; z-index: 5;
-  font-family: var(--display);
-  font-size: calc(30px * var(--sz, 1)); letter-spacing: 0.06em; line-height: 1;
-  color: var(--ink-col, #ffe45c);
-  -webkit-text-stroke: 1.5px var(--ink);
-  text-shadow: 3px 3px 0 var(--ink);
-  padding: 0.55em 0.9em; white-space: nowrap;
-  transform: translate(-50%, -50%) rotate(var(--rot, 0deg));
-  animation: bamin 1s cubic-bezier(0.2, 1.8, 0.4, 1) forwards;
-}
-.bam::before {
-  content: ''; position: absolute; inset: -0.15em -0.25em; z-index: -1;
-  background: var(--burst, #ff3b3b);
-  border: 3px solid var(--ink);
-  clip-path: polygon(50% 0%, 61% 18%, 79% 6%, 79% 26%, 100% 24%, 88% 40%, 100% 55%, 84% 62%, 93% 82%, 74% 76%, 68% 100%, 54% 82%, 40% 100%, 33% 80%, 12% 86%, 20% 66%, 0% 58%, 14% 44%, 0% 26%, 20% 24%, 20% 4%, 38% 16%);
-}
-@keyframes bamin {
-  0%   { transform: translate(-50%, -50%) rotate(var(--rot, 0deg)) scale(0.2); opacity: 0; }
-  18%  { transform: translate(-50%, -50%) rotate(var(--rot, 0deg)) scale(1.15); opacity: 1; }
-  30%  { transform: translate(-50%, -50%) rotate(var(--rot, 0deg)) scale(1); }
-  70%  { transform: translate(-50%, -58%) rotate(var(--rot, 0deg)) scale(1); opacity: 1; }
-  100% { transform: translate(-50%, -85%) rotate(var(--rot, 0deg)) scale(1.05); opacity: 0; }
-}
 
 .flash { position: absolute; inset: 0; pointer-events: none; background: #fff; opacity: 0; }
 .flash.go { animation: flashgo 0.5s ease-out; }
