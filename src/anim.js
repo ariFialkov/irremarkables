@@ -28,6 +28,8 @@ export class Animator {
     this.moveIndex = 0;
     this.dead = false;
     this.rootDelta = { x: 0, z: 0 };
+    this.flyK = 0;
+    this.mixedHipsY = undefined;
   }
 
   action(name) {
@@ -52,9 +54,11 @@ export class Animator {
       a.enabled = true;
       a.play();
       if (this.over) {
-        // an override owns the body: park both, the new base takes over on endOverride
-        a.setEffectiveWeight(0);
-        if (this.base) this.base.setEffectiveWeight(0);
+        // an override owns the body: park both (disabled, but with full weight so
+        // the fadeIn on endOverride has something to ramp — fadeIn multiplies weight)
+        a.setEffectiveWeight(1);
+        a.enabled = false;
+        if (this.base) this.base.enabled = false;
       } else if (this.base) {
         a.setEffectiveWeight(1);
         a.crossFadeFrom(this.base, FADE * 1.6, false);
@@ -95,10 +99,19 @@ export class Animator {
       // a fully faded-out action disables itself; re-arm it before fading back in
       this.base.enabled = true;
       this.base.paused = false;
+      this.base.setEffectiveWeight(1);
       this.base.play();
       this.base.fadeIn(fade);
     }
   }
+
+  // telekinesis victims flail in a looped reaction until dropped / thrown / killed
+  startHeld() {
+    if (this.dead || (this.over && this.over.mode === 'held')) return;
+    const name = ANIM.clips.reaction_2 ? 'reaction_2' : 'reaction';
+    this.startOverride(name, { mode: 'held', loop: true, timeScale: 0.7 });
+  }
+  endHeld() { if (this.over && this.over.mode === 'held') this.endOverride(); }
 
   get attacking() { return !!this.over && this.over.mode === 'attack'; }
   get busy() { return !!this.over && (this.over.mode === 'attack' || this.over.mode === 'death' || this.over.mode === 'landing'); }
@@ -181,12 +194,18 @@ export class Animator {
       if (!o.loop && t >= o.end && o.mode !== 'death') this.endOverride();
     }
 
+    // the mixer skips writing a bone whose blended value did not change since the
+    // last frame, so undo last frame's hips fix-up first or it would accumulate
+    if (this.hips && this.mixedHipsY !== undefined) this.hips.position.y = this.mixedHipsY;
+
     this.mixer.update(dt);
 
-    // post-fix hips: proportion offset, flying hover
+    // post-fix hips: proportion offset, flying hover (smoothed, applies across
+    // overrides too so mid-air attacks don't pop the body up)
+    this.flyK += ((ctx.flying ? 1 : 0) - this.flyK) * Math.min(1, dt * 7);
     if (this.hips) {
-      this.hips.position.y += this.hipsYOffset;
-      if (this.baseName === 'flying' && !this.over) this.hips.position.y -= FLY_HIPS_DROP * this.base.getEffectiveWeight();
+      this.mixedHipsY = this.hips.position.y;
+      this.hips.position.y += this.hipsYOffset - FLY_HIPS_DROP * this.flyK;
     }
     return { root: this.rootDelta };
   }

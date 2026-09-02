@@ -219,6 +219,7 @@ export class Character {
   cast(powerId, hold = false) { this.anim.startCast(this.arch.cast || 'spell_cast', hold); }
   stopCast() { this.anim.stopCast(); }
   hitReaction() { this.anim.hitReaction(); }
+  setHeld(on) { if (on) this.anim.startHeld(); else this.anim.endHeld(); }
   landing() { this.anim.landing(); }
   emote() { this.anim.emote(); }
   die(kind) { this.anim.die(kind); this.aura.visible = false; }
@@ -232,7 +233,7 @@ export class Character {
     this.group.scale.setScalar(this.curScale);
 
     const speed = Math.hypot(this.vel.x, this.vel.z);
-    const flying = this.flying || this.altitude > 0.4;
+    const flying = this.flying;   // set by the game: real flight only, not lifted / thrown / falling
     this.rootMoved = false;
     if (!this.frozen) {
       const { root } = this.anim.update(dt, { speed, backward: this.backward, flying, time });

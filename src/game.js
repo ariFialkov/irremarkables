@@ -221,6 +221,8 @@ export class Game {
     const targetAlt = wantFly ? (b.isNemesis ? Math.max(0, this.player.ch.altitude) : 6 + Math.sin(this.time * 0.7 + ch.phase) * 2) : 0;
     ch.altitude += (targetAlt - ch.altitude) * Math.min(1, dt * 2.2);
     if (ch.altitude < 0.05) ch.altitude = 0;
+    // flying pose only for real flight (and the glide back down after it)
+    ch.flying = wantFly || (ch.flying && ch.altitude > 0.4);
 
     // nemesis catch-up blink
     if (b.isNemesis && this.player) {
@@ -704,7 +706,7 @@ export class Game {
 
     P.tk = { kind, bot, prop, phase: 'lift', y: 0, auraT: 0 };
     ch.cast('telekinesis', true);   // held channel pose until the fling / release
-    if (bot) { bot.held = true; bot.ch.vel.set(0, 0, 0); }
+    if (bot) { bot.held = true; bot.ch.vel.set(0, 0, 0); bot.ch.setHeld(true); }
     if (prop) { prop.busy = true; prop.baseRot = prop.mesh.rotation.y; }
     SFX.tk();
     const pos = kind === 'bot' ? bot.ch.pos : prop.mesh.position;
@@ -802,7 +804,7 @@ export class Game {
     if (!P?.tk) return;
     if (silent) {
       const tk = P.tk;
-      if (tk.kind === 'bot' && tk.bot.ch.alive) { tk.bot.held = false; tk.bot.ch.altitude = 0; }
+      if (tk.kind === 'bot' && tk.bot.ch.alive) { tk.bot.held = false; tk.bot.ch.altitude = 0; tk.bot.ch.setHeld(false); }
       if (tk.kind === 'prop' && tk.prop.alive) { tk.prop.busy = false; tk.prop.mesh.position.y = 0; }
       P.tk = null;
       P.ch.stopCast();
@@ -869,6 +871,7 @@ export class Game {
           if (th.kind === 'bot') {
             th.bot.held = false;
             th.bot.ch.altitude = 0;
+            th.bot.ch.setHeld(false);
             th.bot.repath = 1.5;
             this.fx.emit(nx, 0.6, nz, { count: 8, color: 0xffffff, speed: 3, life: 0.3, size: 1.1 });
           } else {
@@ -1047,7 +1050,7 @@ export class Game {
   backToMenu() {
     this.cancelTelekinesis(true);
     for (const th of this.thrown) {
-      if (th.kind === 'bot' && th.bot.ch.alive) { th.bot.held = false; th.bot.ch.altitude = 0; }
+      if (th.kind === 'bot' && th.bot.ch.alive) { th.bot.held = false; th.bot.ch.altitude = 0; th.bot.ch.setHeld(false); }
       if (th.kind === 'prop' && th.prop.alive) { th.prop.busy = false; th.prop.mesh.position.y = 0; }
     }
     this.thrown = [];
@@ -1103,7 +1106,8 @@ export class Game {
 
     // altitude / flight
     P.prevAlt = ch.altitude;
-    ch.flying = P.flying && P.powerMain.id === 'flight';
+    // flying pose while flight is on, and while gliding back down after it ends
+    ch.flying = (P.flying && P.powerMain.id === 'flight') || (ch.flying && ch.altitude > 0.4);
     ch.bank += ((input.turn * 0.9 + input.look * 6) - ch.bank) * Math.min(1, dt * 4);
     if (P.flying && P.powerMain.id === 'flight') {
       ch.altitude = Math.min(13, ch.altitude + dt * 9);
