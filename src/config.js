@@ -23,6 +23,13 @@ export const CONFIG = {
 
   // ---- Player ----
   PLAYER_SPEED: 9.5,
+  // ---- Flight ----
+  FLIGHT_DECK: 6.5,        // cruising height above the ground (metres)
+  BOT_FLIGHT_DECK: 5,
+  FLIGHT_CLEARANCE: 1.8,   // how far above a rooftop a flyer skims
+  FLIGHT_CLIMB: 10,        // m/s up when something taller is in the way
+  FLIGHT_DESCEND: 7,       // m/s back down once it's cleared
+  FLIGHT_LOOKAHEAD: 9,     // metres ahead to look for tall structures
   PLAYER_HP: 100,
   HP_REGEN: 4,             // hp per second
   SWITCHES_PER_GAME: 3,

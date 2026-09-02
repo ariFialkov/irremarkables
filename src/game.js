@@ -196,7 +196,7 @@ export class Game {
     if (!ch.alive) return;
     if (b.held) { ch.update(dt, this.time); return; }  // telekinesis has them
     ch.update(dt, this.time);
-    if (ch.rootMoved && ch.altitude < 3) this.world.resolve(ch.pos, 0.55, ch.altitude);
+    if (ch.rootMoved) this.world.resolve(ch.pos, 0.55, ch.altitude);
     if (ch.frozen) { ch.vel.set(0, 0, 0); return; }
 
     // keep the lobby near the action: far-drifted bots quietly re-enter nearby
@@ -292,9 +292,14 @@ export class Game {
     // flight altitude
     const chasingFlyer = hunting && this.player.ch.altitude > 2;
     const wantFly = (b.flyUntil && now() < b.flyUntil) || chasingFlyer;
-    const targetAlt = wantFly ? (chasingFlyer ? Math.max(0, this.player.ch.altitude) : 6 + Math.sin(this.time * 0.7 + ch.phase) * 2) : 0;
+    let targetAlt = 0;
+    if (wantFly) {
+      const deck = chasingFlyer ? Math.max(0, this.player.ch.altitude) : CONFIG.BOT_FLIGHT_DECK + Math.sin(this.time * 0.7 + ch.phase) * 1.2;
+      // flyers lift over rooftops in their path rather than passing through them
+      targetAlt = Math.max(deck, this.flightCeiling(ch, ch.vel.x, ch.vel.z));
+    }
     if (!Number.isFinite(ch.altitude)) ch.altitude = 0;
-    ch.altitude += (targetAlt - ch.altitude) * Math.min(1, dt * 2.2);
+    ch.altitude += (targetAlt - ch.altitude) * Math.min(1, dt * (targetAlt > ch.altitude ? 3.2 : 2.2));
     if (!(ch.altitude > 0.05)) ch.altitude = 0;
     // flying pose only for real flight (and the glide back down after it)
     ch.flying = wantFly || (ch.flying && ch.altitude > 0.4);
@@ -329,7 +334,7 @@ export class Game {
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
       ch.yaw += dy * Math.min(1, dt * 8);
-      if (ch.altitude < 3) this.world.resolve(ch.pos, 0.55, ch.altitude);
+      this.world.resolve(ch.pos, 0.55, ch.altitude);   // walls hold you until you're over them
     } else {
       ch.vel.set(0, 0, 0);
       if (!chasing && b.repath > 1) b.wander = this.world.randomOpenPos(ch.pos, 10, 45);
@@ -385,7 +390,15 @@ export class Game {
     const px = b.ch.pos.x, py = b.ch.altitude + 1.2, pz = b.ch.pos.z;
     if (!silent) {
       const col = b.power.color;
-      if (cause === 'shatter') { this.fx.emit(px, py, pz, { count: 34, color: 0x9df2ff, speed: 9, life: 0.8, size: 1.7 }); SFX.shatter(); }
+      if (cause === 'shatter') {
+        // the block bursts: shards, frost puff, a cold shockwave — nothing left behind
+        this.fx.emit(px, py, pz, { count: 44, color: 0x9df2ff, speed: 11, life: 0.85, size: 2.0, gravity: 4 });
+        this.fx.emit(px, py, pz, { count: 26, color: 0xffffff, speed: 5, life: 0.6, size: 2.6, gravity: -1 });
+        this.fx.emit(px, py - 0.6, pz, { count: 18, color: 0x5fb9ff, speed: 7, life: 0.7, size: 1.4, gravity: 6 });
+        this.fx.ring(px, pz, { color: 0x9df2ff, maxR: 4.5, dur: 0.5 });
+        this.fx.addShake(0.25);
+        SFX.shatter();
+      }
       else if (cause === 'fire') { this.fx.emit(px, py, pz, { count: 30, color: 0xff7a3c, speed: 7, life: 0.7, size: 2.2, gravity: 3 }); }
       else if (cause === 'slam') { this.fx.emit(px, py, pz, { count: 30, color: TK_COLOR, speed: 9, life: 0.8, size: 1.9 }); SFX.slam(); }
       else { this.fx.emit(px, py, pz, { count: 24, color: col, speed: 8, life: 0.7, size: 1.8 }); }
@@ -428,7 +441,8 @@ export class Game {
 
     const idx = this.bots.indexOf(b);
     if (idx >= 0) this.bots.splice(idx, 1);
-    if (silent) {
+    if (silent || cause === 'shatter') {
+      // shattered heroes vanish with their ice block; no corpse to second-guess
       b.ch.dispose();
     } else {
       // fall over and lie there a moment before vanishing
@@ -1282,6 +1296,23 @@ export class Game {
     this.ui.showMenu(this.wallet);
   }
 
+  // Height a flyer needs to clear whatever is under it and just ahead of it
+  // (0 when the way is open). dx/dz is the horizontal heading, any length.
+  flightCeiling(ch, dx, dz) {
+    const d = Math.hypot(dx, dz);
+    const ux = d > 0.05 ? dx / d : Math.sin(ch.yaw), uz = d > 0.05 ? dz / d : Math.cos(ch.yaw);
+    const px = -uz, pz = ux;   // sideways, to sample a little wider than a point
+    let h = 0;
+    const steps = d > 0.05 ? [0, 0.25, 0.5, 0.75, 1] : [0, 0.2];
+    for (const s of steps) {
+      const ax = ch.pos.x + ux * s * CONFIG.FLIGHT_LOOKAHEAD, az = ch.pos.z + uz * s * CONFIG.FLIGHT_LOOKAHEAD;
+      for (const side of [-0.9, 0, 0.9]) {
+        h = Math.max(h, this.world.buildingHeightAt(ax + px * side, az + pz * side));
+      }
+    }
+    return h > 0 ? h + CONFIG.FLIGHT_CLEARANCE : 0;
+  }
+
   // ================= PLAYER UPDATE =================
 
   updatePlayer(dt, input) {
@@ -1327,7 +1358,11 @@ export class Game {
     ch.flying = (P.flying && P.powerMain.id === 'flight') || (ch.flying && ch.altitude > 0.4);
     ch.bank += ((input.turn * 0.9 + input.look * 6) - ch.bank) * Math.min(1, dt * 4);
     if (P.flying && P.powerMain.id === 'flight') {
-      ch.altitude = Math.min(13, ch.altitude + dt * 9);
+      // cruise at the flight deck, but climb over anything taller in the way and
+      // settle back down once it's behind you
+      const want = Math.max(CONFIG.FLIGHT_DECK, this.flightCeiling(ch, mx, mz));
+      if (ch.altitude < want) ch.altitude = Math.min(want, ch.altitude + dt * CONFIG.FLIGHT_CLIMB);
+      else ch.altitude = Math.max(want, ch.altitude - dt * CONFIG.FLIGHT_DESCEND);
       if (Math.random() < 0.6) {
         this.fx.emitDir(ch.pos.x, ch.altitude + 0.4, ch.pos.z, this._v1.set(-mx, 0, -mz),
           { count: 1, color: 0x8ecbff, speed: 4, life: 0.4, size: 1.4, cone: 0.3 });
@@ -1463,12 +1498,17 @@ export class Game {
     if (!Number.isFinite(this.camYaw)) this.camYaw = ch.yaw + Math.PI;
     if (!Number.isFinite(this.camPitch)) this.camPitch = 0.42;
     const scale = ch.curScale;
-    const dist = (8.5 + ch.altitude * 0.35) * (0.75 + scale * 0.35);
-    const h = (3.2 + Math.sin(this.camPitch) * 6) * (0.7 + scale * 0.3);
+    // airborne: pull in tighter and lower behind the hero, with a slow drift and
+    // a lean into turns so the view feels like it's floating along too
+    const air = clamp((ch.altitude - 0.6) / 2.5, 0, 1);
+    const flySpeed = Math.hypot(ch.vel.x, ch.vel.z);
+    const dist = (8.5 - 2.9 * air + Math.min(1.2, flySpeed * 0.06) * air) * (0.75 + scale * 0.35);
+    const h = (3.2 + Math.sin(this.camPitch) * 6) * (0.7 + scale * 0.3) * (1 - 0.45 * air);
+    const swayX = Math.sin(this.time * 0.8) * 0.45 * air, swayY = Math.sin(this.time * 1.25 + 1.3) * 0.3 * air;
 
-    const tx = ch.pos.x - Math.sin(this.camYaw) * dist;
-    const tz = ch.pos.z - Math.cos(this.camYaw) * dist;
-    const ty = ch.altitude + h;
+    const tx = ch.pos.x - Math.sin(this.camYaw) * dist + Math.cos(this.camYaw) * swayX;
+    const tz = ch.pos.z - Math.cos(this.camYaw) * dist - Math.sin(this.camYaw) * swayX;
+    const ty = ch.altitude + h + swayY;
 
     // occlusion: march from the player's head toward the desired position and
     // stop short of the first building that would block the view
@@ -1486,11 +1526,14 @@ export class Game {
     safeLerp(this.camPos, this._v2, Math.min(1, dt * 7));
 
     this.camera.position.copy(this.camPos).add(this.fx.shakeOffset);
-    safeLerp(this.camTarget, this._v2.set(ch.pos.x, ch.altitude + 1.6 * scale, ch.pos.z), Math.min(1, dt * 10));
+    safeLerp(this.camTarget, this._v2.set(ch.pos.x, ch.altitude + (1.6 - 0.5 * air) * scale, ch.pos.z), Math.min(1, dt * 10));
     this.camera.lookAt(this.camTarget);
+    // bank the camera with the hero when flying into a turn
+    this.camRoll = (this.camRoll || 0) + ((-ch.bank * 0.16 * air) - (this.camRoll || 0)) * Math.min(1, dt * 5);
+    if (Number.isFinite(this.camRoll)) this.camera.rotateZ(this.camRoll);
 
     const t = now();
-    const targetFov = this.baseFov + (P.speedUntil > t ? 14 : 0) + (ch.altitude > 2 ? 6 : 0);
+    const targetFov = this.baseFov + (P.speedUntil > t ? 14 : 0) + (air > 0 ? 4 + Math.min(6, flySpeed * 0.5) * air : 0);
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 5);
     this.camera.updateProjectionMatrix();
   }

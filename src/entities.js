@@ -56,6 +56,7 @@ export class Character {
     this.yaw = 0;
     this.altitude = 0;
     this.groundY = 0;      // height of the surface underfoot (kerbs, slabs, porches)
+    this.hoverBob = 0;     // gentle rise and fall while hovering in place
     this.hp = CONFIG.PLAYER_HP;
     this.maxHp = CONFIG.PLAYER_HP;
     this.alive = true;
@@ -290,7 +291,10 @@ export class Character {
         this.rootMoved = true;
       }
     }
-    this.group.position.set(this.pos.x, this.altitude + this.groundY, this.pos.z);
+    // hovering in place: float up and down a little; fades out once moving or landed
+    const bobTarget = this.flying && this.altitude > 1 && speed < 1.6 ? Math.sin(time * 2.1 + this.phase) * 0.22 : 0;
+    this.hoverBob += (bobTarget - this.hoverBob) * Math.min(1, dt * 4);
+    this.group.position.set(this.pos.x, this.altitude + this.groundY + this.hoverBob, this.pos.z);
     this.group.rotation.y = this.yaw;
 
     const lift = this.altitude;

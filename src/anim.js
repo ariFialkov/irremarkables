@@ -61,7 +61,9 @@ export class Animator {
         if (this.base) this.base.enabled = false;
       } else if (this.base) {
         a.setEffectiveWeight(1);
-        a.crossFadeFrom(this.base, FADE * 1.6, false);
+        // hover <-> cruise blends slower so stopping in the air reads as settling
+        const fade = (name === 'flying' || name === 'flying_idle') && (this.baseName === 'flying' || this.baseName === 'flying_idle') ? 0.55 : FADE * 1.6;
+        a.crossFadeFrom(this.base, fade, false);
       } else {
         a.setEffectiveWeight(1);
       }
@@ -164,7 +166,11 @@ export class Animator {
     // base state
     if (!this.dead) {
       let name, ts = 1;
-      if (ctx.flying) { name = 'flying'; ts = 1; }
+      if (ctx.flying) {
+        // hover upright when slowing to a stop, stretch out prone once moving
+        name = ctx.speed < 1.6 && ANIM.clips.flying_idle ? 'flying_idle' : 'flying';
+        ts = 1;
+      }
       else if (ctx.speed > 3.2) { name = ctx.backward ? 'running_backward_2' : 'fast_run_4'; ts = clamp(0.6 + ctx.speed / 11, 0.7, 2.4); }
       else if (ctx.speed > 0.5) { name = ctx.backward ? 'walking_backwards' : 'walking_2'; ts = clamp(0.5 + ctx.speed / 3.2, 0.6, 1.6); }
       else { name = this.arch.idle || 'idle_4'; ts = 1; }
