@@ -2,15 +2,19 @@ import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { rand, RUNTIME } from './utils.js';
 import { archetypeFor, instancePalette } from './archetypes.js';
-import { buildRig } from './rig.js';
+import { buildRig, MX } from './rig.js';
 import { Animator } from './anim.js';
 import { Cape } from './cloth.js';
+import { ANIM } from './animlib.js';
 
 const CAPE_SPECS = {
   short: { rows: 6, len: 0.42 },
   medium: { rows: 9, len: 0.7 },
   long: { rows: 12, len: 1.0 },
 };
+
+// the idle clips stand ~93% of the T-pose height; scale so an idle hero is ~1.85 m
+const STAND_FRACTION = 0.93;
 
 const NEMESIS_PALETTE = () => ({
   primary: new THREE.Color(0x1a0a10), secondary: new THREE.Color(0x0d0507), accent: new THREE.Color(0xff2038),
@@ -55,15 +59,16 @@ export class Character {
     this.scaleTarget = 1;
     this.curScale = 1;
     this.flying = false;
+    this.backward = false;
     this.bank = 0;
     this.nemesis = false;
     this.disguise = null;
     this.opacity = 1;
+    this.rootMoved = false;
 
     this.group = new THREE.Group();
     scene.add(this.group);
 
-    // shared overlays
     this.aura = new THREE.Mesh(
       new THREE.RingGeometry(0.55, 0.85, 28),
       new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide })
@@ -108,18 +113,21 @@ export class Character {
     const rig = buildRig(arch, P, { faceless: arch.gear.includes('facelessMask') });
     this.rig = rig;
     this.body = rig.mesh;
+    this.unitScale = (1.85 * arch.build.height) / (ANIM.unitHeight * STAND_FRACTION);
+    this.body.scale.setScalar(this.unitScale);
     this.body.castShadow = RUNTIME.shadows;
     this.group.add(this.body);
-    this.anim = new Animator(rig.bones, arch);
+    this.anim = new Animator(this.body, arch, { hipsYOffset: rig.hipsYOffset });
     this.extras = rig.extras;
-    if (this.label) this.label.position.y = rig.H + 0.35;
-    this.iceShell.scale.setScalar(rig.H / 1.85);
-    this.iceShell.position.y = 1.22 * rig.H / 1.85;
+    this.heightM = 1.85 * arch.build.height;
+    if (this.label) this.label.position.y = this.heightM + 0.35;
+    this.iceShell.scale.setScalar(this.heightM / 1.85);
+    this.iceShell.position.y = 1.22 * this.heightM / 1.85;
 
     if (arch.cape) {
       const cs = CAPE_SPECS[arch.cape];
       const capeColor = P.primary.clone().lerp(P.secondary, 0.4);
-      this.cape = new Cape(this.scene, { rows: cs.rows, cols: 7, width: rig.capeWidth, length: cs.len * rig.H, color: capeColor });
+      this.cape = new Cape(this.scene, { rows: cs.rows, cols: 7, width: rig.capeWidth * this.unitScale, length: cs.len * this.heightM, color: capeColor });
       this.capePins = rig.pins.map(() => new THREE.Vector3());
     }
     this.applyOpacity();
@@ -127,6 +135,7 @@ export class Character {
 
   destroyBody() {
     if (this.body) {
+      this.anim?.dispose();
       this.group.remove(this.body);
       this.body.skeleton?.dispose?.();
       this.body.geometry.dispose();
@@ -166,9 +175,9 @@ export class Character {
     this.aura.material.opacity = 0.95;
     this.aura.scale.setScalar(1.5);
     this.buildLook(this.power.id, NEMESIS_PALETTE());
-    if (this.label) { this.group.remove(this.label); }
+    if (this.label) this.group.remove(this.label);
     this.label = makeLabelSprite(this.name, '#ff5470');
-    this.label.position.y = this.rig.H + 0.35;
+    this.label.position.y = this.heightM + 0.35;
     this.group.add(this.label);
   }
 
@@ -198,28 +207,25 @@ export class Character {
   get combat() { return this.arch.combat; }
   get attacking() { return this.anim.attacking; }
 
-  // Play the archetype's next attack; returns timing + damage info for the game.
+  // Play the archetype's next attack clip; returns timing + damage for the game.
   startAttack() {
     const c = this.arch.combat;
     const name = this.anim.nextMove();
     const info = this.anim.startAttack(name, c.speed);
-    return {
-      move: name,
-      duration: info.duration,
-      hits: info.hits,
-      damage: c.damage * info.hitScale,
-      range: c.range,
-      arc: c.arc,
-    };
+    if (!info) return { move: name, duration: 0.5, hits: [0.25], damage: c.damage, range: c.range, arc: c.arc };
+    return { move: name, duration: info.duration, hits: info.hits, damage: c.damage * info.hitScale, range: c.range, arc: c.arc };
   }
 
-  cast(powerId, duration) { this.anim.startCast(powerId, duration); }
+  cast(powerId, hold = false) { this.anim.startCast(this.arch.cast || 'spell_cast', hold); }
   stopCast() { this.anim.stopCast(); }
+  hitReaction() { this.anim.hitReaction(); }
+  landing() { this.anim.landing(); }
+  emote() { this.anim.emote(); }
+  die(kind) { this.anim.die(kind); this.aura.visible = false; }
 
   // ---------- per-frame ----------
 
   update(dt, time) {
-    if (!this.alive) return;
     if (!this.frozen && this.iceShell.visible) this.iceShell.visible = false;
 
     this.curScale += (this.scaleTarget - this.curScale) * Math.min(1, dt * 5);
@@ -227,15 +233,22 @@ export class Character {
 
     const speed = Math.hypot(this.vel.x, this.vel.z);
     const flying = this.flying || this.altitude > 0.4;
-    let bob = 0;
+    this.rootMoved = false;
     if (!this.frozen) {
-      ({ bob } = this.anim.update(dt, { speed, flying, bank: this.bank, time }));
+      const { root } = this.anim.update(dt, { speed, backward: this.backward, flying, time });
+      if (root.x || root.z) {
+        // root motion: rig units -> metres, character-local -> world
+        const s = this.unitScale * this.curScale;
+        const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
+        this.pos.x += (root.x * cy + root.z * sy) * s;
+        this.pos.z += (-root.x * sy + root.z * cy) * s;
+        this.rootMoved = true;
+      }
     }
-    this.group.position.set(this.pos.x, this.altitude + bob * this.curScale, this.pos.z);
+    this.group.position.set(this.pos.x, this.altitude, this.pos.z);
     this.group.rotation.y = this.yaw;
 
-    // blob shadow pinned to the ground, fading with height
-    const lift = this.altitude + bob;
+    const lift = this.altitude;
     this.blobShadow.position.y = -lift / Math.max(0.001, this.curScale) + 0.04;
     const fade = 1 / (1 + lift * 0.25);
     this.blobShadow.material.opacity = 0.3 * fade * this.opacity;
@@ -249,7 +262,7 @@ export class Character {
 
     if (this.cape) {
       this.group.updateMatrixWorld(true);
-      const chest = this.rig.bones.chest, hips = this.rig.bones.hips;
+      const chest = this.rig.bones[MX.spine2], hips = this.rig.bones[MX.hips];
       for (let i = 0; i < this.capePins.length; i++) {
         this.capePins[i].copy(this.rig.pins[i]);
         chest.localToWorld(this.capePins[i]);
@@ -259,7 +272,7 @@ export class Character {
       const q = new THREE.Quaternion(); chest.getWorldQuaternion(q);
       const back = new THREE.Vector3(0, 0, -1).applyQuaternion(q).normalize();
       const mid = a.clone().add(b).multiplyScalar(0.5);
-      this.cape.update(dt, this.capePins, { a, b, r: this.rig.torsoRadius * this.curScale * 1.12, back, mid }, this.vel, this.curScale);
+      this.cape.update(dt, this.capePins, { a, b, r: this.rig.torsoRadius * this.unitScale * this.curScale * 1.12, back, mid }, this.vel, this.curScale);
     }
   }
 

@@ -52,6 +52,7 @@ export class Game {
     this.clones = [];
     this.thrown = [];          // telekinetically flung bodies & props
     this.pendingHits = [];     // scheduled melee impacts (land on the animation's hit frame)
+    this.corpses = [];         // fallen heroes playing out their death clip before vanishing
     this.pendingRespawns = [];
     this.player = null;
     this.nemesis = null;
@@ -137,6 +138,7 @@ export class Game {
     if (!ch.alive) return;
     if (b.held) { ch.update(dt, this.time); return; }  // telekinesis has them
     ch.update(dt, this.time);
+    if (ch.rootMoved && ch.altitude < 3) this.world.resolve(ch.pos, 0.55, ch.altitude);
     if (ch.frozen) { ch.vel.set(0, 0, 0); return; }
 
     // keep the lobby near the action: far-drifted bots quietly re-enter nearby
@@ -290,6 +292,7 @@ export class Game {
       const d = att.ch.pos.distanceTo(tgt.ch.pos);
       if (d > h.range + 0.6) continue;
       tgt.hp -= h.damage;
+      tgt.ch.hitReaction();
       this.fx.emit(tgt.ch.pos.x, 1.4 + tgt.ch.altitude, tgt.ch.pos.z, { count: 6, color: 0xffffff, speed: 3.5, life: 0.3, size: 1.1 });
       if (tgt.hp <= 0) this.killBot(tgt, h.owner === 'clone' ? { byPlayer: true } : { byBot: att });
     }
@@ -337,13 +340,44 @@ export class Game {
     if (b.isNemesis) {
       this.nemesis = null;
       this.nemesisRetry = rand(2.5, 4.5);   // the director sends another hunter
-      if (byPlayer) this.ui.announce('NEMESIS DOWN — BUT THEY KNOW WHERE YOU ARE', { danger: true, dur: 2400 });
+      if (byPlayer) {
+        this.ui.announce('NEMESIS DOWN — BUT THEY KNOW WHERE YOU ARE', { danger: true, dur: 2400 });
+        this.player.ch.emote();
+      }
     }
 
     const idx = this.bots.indexOf(b);
     if (idx >= 0) this.bots.splice(idx, 1);
-    b.ch.dispose();
+    if (silent) {
+      b.ch.dispose();
+    } else {
+      // fall over and lie there a moment before vanishing
+      const attacker = byPlayer ? this.player?.ch : byBot?.ch;
+      b.ch.die(this.deathKindFor(b.ch, attacker, cause));
+      b.ch.vel.set(0, 0, 0);
+      this.corpses.push({ ch: b.ch, ttl: 2.8 });
+    }
     if (!b.isNemesis) this.pendingRespawns.push(rand(1.5, 4));
+  }
+
+  // Which death clip fits: flung/burned/shattered bodies fly back; melee
+  // from the front knocks you onto your back, from behind onto your face.
+  deathKindFor(victim, attacker, cause) {
+    if (cause === 'slam' || cause === 'fire' || cause === 'shatter') return 'fly';
+    if (!attacker) return 'back';
+    const dx = attacker.pos.x - victim.pos.x, dz = attacker.pos.z - victim.pos.z;
+    const facing = dx * Math.sin(victim.yaw) + dz * Math.cos(victim.yaw);
+    return facing >= 0 ? 'back' : 'forward';
+  }
+
+  updateCorpses(dt) {
+    for (let i = this.corpses.length - 1; i >= 0; i--) {
+      const c = this.corpses[i];
+      c.ttl -= dt;
+      c.ch.update(dt, this.time);
+      if (c.ttl < 0.6) c.ch.setOpacity(Math.max(0, c.ttl / 0.6));
+      if (c.ttl <= 0) { c.ch.dispose(); this.corpses.splice(i, 1); }
+    }
   }
 
   // ================= ROUND FLOW =================
@@ -465,6 +499,7 @@ export class Game {
         continue;
       }
       b.hp -= h.damage;
+      b.ch.hitReaction();
       this.fx.emit(b.ch.pos.x, 1.4 + b.ch.altitude, b.ch.pos.z, { count: 8, color: 0xffffff, speed: 4, life: 0.3, size: 1.2 });
       this.fx.addShake(0.1 + h.damage * 0.002);
       SFX.punch();
@@ -668,7 +703,7 @@ export class Game {
     }
 
     P.tk = { kind, bot, prop, phase: 'lift', y: 0, auraT: 0 };
-    ch.cast('telekinesis', 30);
+    ch.cast('telekinesis', true);   // held channel pose until the fling / release
     if (bot) { bot.held = true; bot.ch.vel.set(0, 0, 0); }
     if (prop) { prop.busy = true; prop.baseRot = prop.mesh.rotation.y; }
     SFX.tk();
@@ -857,6 +892,7 @@ export class Game {
   superheroLanding() {
     const P = this.player, ch = P.ch;
     P.landingUntil = 0;
+    ch.landing();
     SFX.landing();
     this.fx.addShake(1.1);
     this.ui.flash();
@@ -911,6 +947,7 @@ export class Game {
     if (t < P.invulnUntil) return;
 
     P.ch.hp -= amount;
+    P.ch.hitReaction();
     SFX.hurt();
     this.fx.addShake(0.3);
     this.fx.emit(P.ch.pos.x, 1.4 + P.ch.altitude, P.ch.pos.z, { count: 8, color: 0xff5470, speed: 4, life: 0.4 });
@@ -965,6 +1002,9 @@ export class Game {
     const P = this.player;
     this.cancelTelekinesis(true);
     P.ch.alive = false;
+    P.ch.vel.set(0, 0, 0);
+    P.ch.flying = false;
+    P.ch.die(this.deathKindFor(P.ch, killer?.ch, 'attack'));
     this.state = 'dying';
     this.deathT = 0;
     this.deathKiller = killer;
@@ -1012,6 +1052,8 @@ export class Game {
     }
     this.thrown = [];
     this.pendingHits = [];
+    for (const c of this.corpses) c.ch.dispose();
+    this.corpses = [];
     if (this.player) { this.player.ch.dispose(); this.player = null; }
     if (this.nemesis) { this.killBot(this.nemesis, { silent: true }); this.nemesis = null; }
     this.nemesisRetry = 0;
@@ -1042,8 +1084,11 @@ export class Game {
     ch.vel.set(mx * spd, 0, mz * spd);
     ch.pos.x += ch.vel.x * dt;
     ch.pos.z += ch.vel.z * dt;
+    // backpedalling keeps you facing the camera and plays the backward clips
+    const backward = input.moveZ < -0.2 && Math.abs(input.moveX) < 0.5;
+    ch.backward = backward && moving;
     if (moving) {
-      const targetYaw = Math.atan2(mx, mz);
+      const targetYaw = backward ? this.camYaw : Math.atan2(mx, mz);
       let dy = targetYaw - ch.yaw;
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
@@ -1139,6 +1184,7 @@ export class Game {
     }
 
     ch.update(dt, this.time);
+    if (ch.rootMoved) this.world.resolve(ch.pos, 0.6 * ch.curScale, ch.altitude);
   }
 
   updateClones(dt) {
@@ -1183,6 +1229,7 @@ export class Game {
         c.ch.vel.set(0, 0, 0);
       }
       c.ch.update(dt, this.time);
+      if (c.ch.rootMoved) this.world.resolve(c.ch.pos, 0.55, 0);
     }
   }
 
@@ -1259,8 +1306,6 @@ export class Game {
     this.camPos.lerp(this._v2.set(p.x - Math.sin(ang) * r, 3.5 + this.deathT * 1.5, p.z - Math.cos(ang) * r), Math.min(1, dt * 4));
     this.camera.position.copy(this.camPos).add(this.fx.shakeOffset);
     this.camera.lookAt(p.x, 1, p.z);
-    P.ch.group.rotation.x = Math.min(Math.PI / 2, this.deathT * 1.8);
-    P.ch.group.position.y = Math.max(0.3, 1 - this.deathT * 0.6);
   }
 
   // ================= LEADERBOARD =================
@@ -1309,6 +1354,7 @@ export class Game {
     this.updateProjectiles(dt);
     this.updateThrown(dt);
     this.processHits();
+    this.updateCorpses(dt);
     this.fx.update(dt);
 
     const input = this.controls.poll();
@@ -1353,7 +1399,7 @@ export class Game {
     } else if (this.state === 'dying') {
       this.updateCameraDeath(rawDt);
       this.player.ch.update(dt, this.time);
-      if (this.deathT > 2.4) {
+      if (this.deathT > 3.0) {
         this.timescale = 1;
         this.finishRound();
       }

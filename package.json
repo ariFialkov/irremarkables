@@ -9,6 +9,7 @@
     "build": "node scripts/gen-icons.mjs && node scripts/gen-font.mjs && vite build && node scripts/check-dist.mjs",
     "preview": "vite preview",
     "icons": "node scripts/gen-icons.mjs",
+    "bake": "node scripts/bake-anims.mjs",
     "check": "node scripts/check-dist.mjs"
   },
   "dependencies": {
