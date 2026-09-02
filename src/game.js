@@ -15,6 +15,17 @@ import { rand, randInt, pick, clamp, botName, formatMoney, weightedPick, RUNTIME
 const now = () => performance.now() / 1000;
 const TK_COLOR = 0xc07bff;
 
+const finite3 = (v) => Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
+
+// Camera positions are lerp accumulators: once one holds a NaN it keeps it for
+// the rest of the session and the scene renders black. Snap rather than blend
+// whenever either side goes bad, so a single glitched frame can't stick.
+function safeLerp(v, target, k) {
+  if (!finite3(target)) return;
+  if (!finite3(v)) { v.copy(target); return; }
+  v.lerp(target, k);
+}
+
 // comic-book impact words per hit kind
 const BAM_WORDS = {
   hit: ['POW!', 'WHAM!', 'SMACK!', 'BIFF!', 'THWACK!', 'BONK!', 'WHACK!', 'BAM!'],
@@ -273,8 +284,9 @@ export class Game {
     const chasingFlyer = hunting && this.player.ch.altitude > 2;
     const wantFly = (b.flyUntil && now() < b.flyUntil) || chasingFlyer;
     const targetAlt = wantFly ? (chasingFlyer ? Math.max(0, this.player.ch.altitude) : 6 + Math.sin(this.time * 0.7 + ch.phase) * 2) : 0;
+    if (!Number.isFinite(ch.altitude)) ch.altitude = 0;
     ch.altitude += (targetAlt - ch.altitude) * Math.min(1, dt * 2.2);
-    if (ch.altitude < 0.05) ch.altitude = 0;
+    if (!(ch.altitude > 0.05)) ch.altitude = 0;
     // flying pose only for real flight (and the glide back down after it)
     ch.flying = wantFly || (ch.flying && ch.altitude > 0.4);
 
@@ -465,6 +477,11 @@ export class Game {
     this.state = 'playing';
     this.clearHunters();
     this.camYaw = ch.yaw + Math.PI;
+    this.camPitch = 0.42;
+    // start the chase camera parked behind the hero rather than inheriting
+    // wherever the menu camera happened to be
+    this.camTarget.set(p.x, 1.6, p.z);
+    this.camPos.set(p.x - Math.sin(this.camYaw) * 8.5, 6.6, p.z - Math.cos(this.camYaw) * 8.5);
     this.ui.showHUD(this.controls.isTouch);
     this.ui.setSwitches(this.player.switchesLeft);
     this.ui.setTotal(0, 0);
@@ -1431,6 +1448,8 @@ export class Game {
     const P = this.player, ch = P.ch;
     this.camYaw -= input.look + input.turn * 2.6 * dt;
     this.camPitch = clamp(this.camPitch + input.pitch, 0.12, 1.1);
+    if (!Number.isFinite(this.camYaw)) this.camYaw = ch.yaw + Math.PI;
+    if (!Number.isFinite(this.camPitch)) this.camPitch = 0.42;
     const scale = ch.curScale;
     const dist = (8.5 + ch.altitude * 0.35) * (0.75 + scale * 0.35);
     const h = (3.2 + Math.sin(this.camPitch) * 6) * (0.7 + scale * 0.3);
@@ -1452,10 +1471,10 @@ export class Game {
       if (this.world.buildingHeightAt(sx, sz) > sy) { k = Math.max(0.18, (s - 1) / steps); break; }
     }
     this._v2.set(hx + (tx - hx) * k, hy + (ty - hy) * k, hz + (tz - hz) * k);
-    this.camPos.lerp(this._v2, Math.min(1, dt * 7));
+    safeLerp(this.camPos, this._v2, Math.min(1, dt * 7));
 
     this.camera.position.copy(this.camPos).add(this.fx.shakeOffset);
-    this.camTarget.lerp(this._v2.set(ch.pos.x, ch.altitude + 1.6 * scale, ch.pos.z), Math.min(1, dt * 10));
+    safeLerp(this.camTarget, this._v2.set(ch.pos.x, ch.altitude + 1.6 * scale, ch.pos.z), Math.min(1, dt * 10));
     this.camera.lookAt(this.camTarget);
 
     const t = now();
@@ -1481,8 +1500,8 @@ export class Game {
       5.5 + Math.sin(this.time * 0.3) * 2 + this.attractBot.ch.altitude,
       p.z + Math.sin(this.attractAngle) * r
     );
-    this.camPos.lerp(this._v2, Math.min(1, dt * 1.2));
-    this.camTarget.lerp(this._v2.set(p.x, this.attractBot.ch.altitude + 1.5, p.z), Math.min(1, dt * 2.5));
+    safeLerp(this.camPos, this._v2, Math.min(1, dt * 1.2));
+    safeLerp(this.camTarget, this._v2.set(p.x, this.attractBot.ch.altitude + 1.5, p.z), Math.min(1, dt * 2.5));
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camTarget);
     this.camera.fov += (this.baseFov - this.camera.fov) * Math.min(1, dt);

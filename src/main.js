@@ -29,10 +29,17 @@ async function boot() {
   resize();
 
   let last = performance.now();
+  let faults = 0;
   function frame(t) {
     const dt = (t - last) / 1000;
     last = t;
-    game.update(dt);
+    // never let one bad frame kill the loop: the canvas would stay black for
+    // the rest of the session while the UI kept responding
+    try {
+      game.update(dt);
+    } catch (e) {
+      if (faults++ < 5) console.error('frame error', e);
+    }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

@@ -62,6 +62,7 @@ export class Character {
     this.backward = false;
     this.bank = 0;
     this.nemesis = false;
+    this.phase = Math.random() * Math.PI * 2;   // per-character offset for hover bob etc.
     this.disguise = null;
     this.propMesh = null;
     this.opacity = 1;
@@ -251,6 +252,9 @@ export class Character {
 
   update(dt, time) {
     if (!this.frozen && this.iceShell.visible) this.iceShell.visible = false;
+    // a single bad number here would spread into the camera, which never recovers
+    if (!Number.isFinite(this.altitude)) this.altitude = 0;
+    if (!Number.isFinite(this.pos.x + this.pos.z)) this.pos.set(0, 0, 0);
 
     this.curScale += (this.scaleTarget - this.curScale) * Math.min(1, dt * 5);
     this.group.scale.setScalar(this.curScale);
