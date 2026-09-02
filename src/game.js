@@ -513,7 +513,7 @@ export class Game {
     this.ui.setTotal(0, 0);
     this.ui.setHP(1);
     this.controls.setEnabled(true);
-    this.ui.announce(`${power.emblem} ${power.name.toUpperCase()}`, { dur: 1800 });
+    this.ui.announce(power.name.toUpperCase(), { dur: 1800, icon: power.id });
     this.fx.ring(p.x, p.z, { color: power.color, maxR: 6, dur: 0.7 });
     this.fx.emit(p.x, 1, p.z, { count: 30, color: power.color, speed: 7, life: 0.8 });
     SFX.whoosh();
@@ -548,7 +548,7 @@ export class Game {
     const p = this.player.ch.pos;
     this.fx.ring(p.x, p.z, { color: power.color, maxR: 5, dur: 0.5 });
     this.fx.emit(p.x, 1.4, p.z, { count: 26, color: power.color, speed: 6, life: 0.7 });
-    this.ui.announce(`${power.emblem} ${power.name.toUpperCase()}`, { dur: 1500 });
+    this.ui.announce(power.name.toUpperCase(), { dur: 1500, icon: power.id });
     SFX.morph();
   }
 
@@ -1043,7 +1043,7 @@ export class Game {
         P.twoUntil = t + it.def.duration;
         const others = POWERS.filter((p) => p.id !== P.powerMain.id);
         P.secondPower = pick(others);
-        this.ui.announce(`${P.secondPower.emblem} + ${P.powerMain.emblem}  TWO POWERS`, { dur: 2200 });
+        this.ui.announce(`TWO POWERS: ${P.secondPower.name.toUpperCase()}`, { dur: 2200, icon: P.secondPower.id });
       } else if (it.def.id === 'extraswitch') {
         P.switchesLeft++;
         this.ui.setSwitches(P.switchesLeft);
@@ -1650,13 +1650,13 @@ export class Game {
         this.ui.leaderboard(this.leaderboardRows());
         const buffs = [];
         if (P.absorbUntil > t) buffs.push({ emblem: '🧬', label: Math.ceil(P.absorbUntil - t) + 's' });
-        if (P.twoUntil > t && P.secondPower) buffs.push({ emblem: P.secondPower.emblem, label: Math.ceil(P.twoUntil - t) + 's' });
+        if (P.twoUntil > t && P.secondPower) buffs.push({ icon: P.secondPower.id, label: Math.ceil(P.twoUntil - t) + 's' });
         if (P.enlargeUntil > t) buffs.push({ emblem: '🦹', label: Math.ceil(P.enlargeUntil - t) + 's' });
         if (P.landingUntil > t) buffs.push({ emblem: '💥', label: Math.ceil(P.landingUntil - t) + 's' });
         if (P.fireballArmed) buffs.push({ emblem: '☄', label: 'armed' });
-        if (P.invisUntil > t) buffs.push({ emblem: '👁', label: Math.ceil(P.invisUntil - t) + 's' });
-        if (P.ch.propMesh) buffs.push({ emblem: '🎭', label: 'hidden' });
-        if (P.tk) buffs.push({ emblem: '🔮', label: 'hold' });
+        if (P.invisUntil > t) buffs.push({ icon: 'invisibility', label: Math.ceil(P.invisUntil - t) + 's' });
+        if (P.ch.propMesh) buffs.push({ icon: 'shapeshift', label: 'hidden' });
+        if (P.tk) buffs.push({ icon: 'telekinesis', label: 'hold' });
         this.ui.setBuffs(buffs);
       }
     } else if (this.state === 'menu' || this.state === 'results') {

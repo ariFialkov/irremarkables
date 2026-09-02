@@ -1,5 +1,6 @@
 import { CONFIG } from './config.js';
 import { POWERS } from './powers.js';
+import { powerIcon, LOCK_ICON } from './icons.js';
 import { formatMoney } from './utils.js';
 import { SFX } from './audio.js';
 
@@ -85,7 +86,7 @@ export class UI {
         + (pw.rare ? ' rare' : '')
         + (locked ? ' locked' : '');
       cell.style.setProperty('--pcolor', '#' + pw.color.toString(16).padStart(6, '0'));
-      cell.innerHTML = `<div class="em">${pw.emblem}</div><div class="nm">${pw.name}</div>`;
+      cell.innerHTML = `<div class="em">${powerIcon(pw.id)}${locked ? LOCK_ICON : ''}</div><div class="nm">${pw.name}</div>`;
       cell.addEventListener('click', () => {
         SFX.click();
         if (locked) {
@@ -150,7 +151,7 @@ export class UI {
   }
 
   setPowerButton(power, cooldownFrac) {
-    $('poweruse-icon').textContent = power ? power.emblem : '⚡';
+    $('poweruse-icon').innerHTML = power ? powerIcon(power.id, '100%') : powerIcon('speed', '100%');
     const circ = $('cd-circle');
     circ.style.stroke = power ? '#' + power.color.toString(16).padStart(6, '0') : '#6ea8ff';
     circ.style.strokeDashoffset = String(289 * cooldownFrac);
@@ -161,7 +162,7 @@ export class UI {
 
   setBuffs(buffs) {
     $('buff-row').innerHTML = buffs
-      .map((b) => `<span class="buff-chip">${b.emblem} ${b.label}</span>`)
+      .map((b) => `<span class="buff-chip">${b.icon ? powerIcon(b.icon) : b.emblem} ${b.label}</span>`)
       .join('');
   }
 
@@ -191,9 +192,10 @@ export class UI {
     setTimeout(() => el.remove(), 1000);
   }
 
-  announce(text, { danger = false, dur = 2200 } = {}) {
+  announce(text, { danger = false, dur = 2200, icon = null } = {}) {
     const el = $('announce');
     el.textContent = text;
+    if (icon) el.innerHTML = powerIcon(icon) + '<span>' + el.innerHTML + '</span>';
     el.classList.remove('hidden');
     el.classList.toggle('danger', danger);
     clearTimeout(this.announceTimer);
@@ -223,7 +225,7 @@ export class UI {
       const cell = document.createElement('div');
       const disabled = p.id === currentId || (!free && switchesLeft <= 0);
       cell.className = 'switch-cell' + (p.id === currentId ? ' current' : '') + (disabled ? ' disabled' : '');
-      cell.innerHTML = `<div class="em">${p.emblem}</div><div class="nm">${p.name}</div>`;
+      cell.innerHTML = `<div class="em">${powerIcon(p.id)}</div><div class="nm">${p.name}</div>`;
       cell.addEventListener('click', () => {
         if (disabled) return;
         SFX.click();
