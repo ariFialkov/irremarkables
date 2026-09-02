@@ -13,6 +13,8 @@ import { MX } from './rig.js';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 const FADE = 0.16;
+const TMP_Q = new THREE.Quaternion();
+const TMP_V = new THREE.Vector3();
 const FLY_HIPS_DROP = 11.5;   // the flying clip hovers ~13 units up; keep it near the group origin
 
 export class Animator {
@@ -29,7 +31,20 @@ export class Animator {
     this.dead = false;
     this.rootDelta = { x: 0, z: 0 };
     this.flyK = 0;
+    this.floatK = 0;      // crucifix float through take-off / touch-down
+    this.tense = 0;       // braced hover while drifting backward
     this.mixedHipsY = undefined;
+    this.bones = mesh.skeleton.bones;
+    this.bone = {};
+    for (const b of this.bones) this.bone[b.name] = b;
+  }
+
+  // Nudge a bone's orientation by an axis/angle in its local frame (scaled by k).
+  _twist(name, ax, ay, az, angle, k) {
+    const b = this.bone[name];
+    if (!b || !k) return;
+    TMP_Q.setFromAxisAngle(TMP_V.set(ax, ay, az), angle * k);
+    b.quaternion.multiply(TMP_Q);
   }
 
   action(name) {
@@ -167,8 +182,8 @@ export class Animator {
     if (!this.dead) {
       let name, ts = 1;
       if (ctx.flying) {
-        // hover upright when slowing to a stop, stretch out prone once moving
-        name = ctx.speed < 1.6 && ANIM.clips.flying_idle ? 'flying_idle' : 'flying';
+        // hover upright when slowing to a stop or drifting backward, stretch out prone once moving
+        name = (ctx.speed < 1.6 || ctx.backward) && ANIM.clips.flying_idle ? 'flying_idle' : 'flying';
         ts = 1;
       }
       else if (ctx.speed > 3.2) { name = ctx.backward ? 'running_backward_2' : 'fast_run_4'; ts = clamp(0.6 + ctx.speed / 11, 0.7, 2.4); }
@@ -209,10 +224,43 @@ export class Animator {
     // post-fix hips: proportion offset, flying hover (smoothed, applies across
     // overrides too so mid-air attacks don't pop the body up)
     this.flyK += ((ctx.flying ? 1 : 0) - this.flyK) * Math.min(1, dt * 7);
-    if (this.hips) {
-      this.mixedHipsY = this.hips.position.y;
-      this.hips.position.y += this.hipsYOffset - FLY_HIPS_DROP * this.flyK;
+    if (this.hips) this.mixedHipsY = this.hips.position.y;
+
+    // take-off / touch-down: blend the whole body toward the bind pose — arms
+    // out, legs together, a clean crucifix float — instead of leaving the feet
+    // planted in a ground stance while the ground drops away
+    this.floatK += ((ctx.float && !this.over ? 1 : 0) - this.floatK) * Math.min(1, dt * 7);
+    if (this.floatK > 0.002) {
+      for (const b of this.bones) {
+        const r = b.userData.restQuat;
+        if (r) b.quaternion.slerp(r, this.floatK);
+      }
+      if (this.hips) {
+        const restY = this.hips.userData.restPos?.y ?? this.hips.position.y;
+        this.hips.position.y += (restY - this.hips.position.y) * this.floatK;
+      }
     }
+
+    // drifting backward in the air: hold the hover pose but brace — head down a
+    // touch, shoulders rolled in, arms pulled toward the body, legs drawn up
+    const wantTense = ctx.flying && ctx.backward && ctx.speed > 1.6 && !this.over ? 1 : 0;
+    this.tense += (wantTense - this.tense) * Math.min(1, dt * 5);
+    if (this.tense > 0.002) {
+      const k = this.tense;
+      this._twist(MX.spine1, 1, 0, 0, 0.10, k);
+      this._twist(MX.spine2, 1, 0, 0, 0.10, k);
+      this._twist(MX.head, 1, 0, 0, 0.18, k);
+      this._twist(MX.L.arm, 0, 0, 1, 0.42, k);
+      this._twist(MX.R.arm, 0, 0, 1, -0.42, k);
+      this._twist(MX.L.foreArm, 1, 0, 0, 0.9, k);    // elbows bend, fists come up to a guard
+      this._twist(MX.R.foreArm, 1, 0, 0, 0.9, k);
+      this._twist(MX.L.upLeg, 1, 0, 0, -0.28, k);
+      this._twist(MX.R.upLeg, 1, 0, 0, -0.28, k);
+      this._twist(MX.L.leg, 1, 0, 0, 0.45, k);
+      this._twist(MX.R.leg, 1, 0, 0, 0.45, k);
+    }
+
+    if (this.hips) this.hips.position.y += this.hipsYOffset - FLY_HIPS_DROP * this.flyK * (1 - this.floatK);
     return { root: this.rootDelta };
   }
 

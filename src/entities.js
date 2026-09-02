@@ -57,6 +57,10 @@ export class Character {
     this.altitude = 0;
     this.groundY = 0;      // height of the surface underfoot (kerbs, slabs, porches)
     this.hoverBob = 0;     // gentle rise and fall while hovering in place
+    this.prevYaw = 0;
+    this.turnRate = 0;     // smoothed yaw rate, drives the airborne body roll
+    this.roll = 0;
+    this.pitch = 0;
     this.hp = CONFIG.PLAYER_HP;
     this.maxHp = CONFIG.PLAYER_HP;
     this.alive = true;
@@ -279,9 +283,12 @@ export class Character {
 
     const speed = Math.hypot(this.vel.x, this.vel.z);
     const flying = this.flying;   // set by the game: real flight only, not lifted / thrown / falling
+    // through the first couple of metres of a take-off or the last of a landing the
+    // animator floats the body in a crucifix instead of a planted ground stance
+    const float = flying && this.altitude < 2.6;
     this.rootMoved = false;
     if (!this.frozen) {
-      const { root } = this.anim.update(dt, { speed, backward: this.backward, flying, time });
+      const { root } = this.anim.update(dt, { speed, backward: this.backward, flying, float, time });
       if (root.x || root.z) {
         // root motion: rig units -> metres, character-local -> world
         const s = this.unitScale * this.curScale;
@@ -296,6 +303,21 @@ export class Character {
     this.hoverBob += (bobTarget - this.hoverBob) * Math.min(1, dt * 4);
     this.group.position.set(this.pos.x, this.altitude + this.groundY + this.hoverBob, this.pos.z);
     this.group.rotation.y = this.yaw;
+
+    // airborne body language: roll into turns, nose down with speed, lean back
+    // when drifting in reverse — all on the body, so the cape and hits follow
+    let dYaw = this.yaw - this.prevYaw;
+    while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+    while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+    this.prevYaw = this.yaw;
+    const yawRate = dt > 0 ? dYaw / dt : 0;
+    this.turnRate += (Math.max(-6, Math.min(6, yawRate)) - this.turnRate) * Math.min(1, dt * 6);
+    const airborne = flying && this.altitude > 0.8;
+    const wantRoll = airborne ? -Math.max(-0.6, Math.min(0.6, this.turnRate * 0.16)) : 0;
+    const wantPitch = airborne ? (this.backward ? 0.16 : speed > 1.6 ? -0.10 * Math.min(1, speed / 12) : 0) : 0;
+    this.roll += (wantRoll - this.roll) * Math.min(1, dt * 5);
+    this.pitch += (wantPitch - this.pitch) * Math.min(1, dt * 4);
+    if (this.body) this.body.rotation.set(this.pitch, 0, this.roll);
 
     const lift = this.altitude;
     this.blobShadow.position.y = -lift / Math.max(0.001, this.curScale) + 0.04;

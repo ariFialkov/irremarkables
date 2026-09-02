@@ -184,6 +184,9 @@ export function buildRig(arch, P, { faceless = false } = {}) {
     bone.name = n;
     bone.position.fromArray(s.pos);
     bone.quaternion.fromArray(s.quat);
+    // bind pose kept for procedural blends (the T-pose doubles as the flight "float")
+    bone.userData.restQuat = bone.quaternion.clone();
+    bone.userData.restPos = bone.position.clone();
     bones[n] = bone;
   }
   for (const n of names) {
