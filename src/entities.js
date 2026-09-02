@@ -40,6 +40,11 @@ function makeLabelSprite(text, color = '#cfe0ff') {
   return spr;
 }
 
+// The world every character stands on. Injected once by the game so each
+// character can find the surface under its own feet without a per-call-site hookup.
+let WORLD = null;
+export function setCharacterWorld(w) { WORLD = w; }
+
 export class Character {
   constructor(scene, { name = '', isPlayer = false, power = null, paletteSeed = null } = {}) {
     this.scene = scene;
@@ -50,6 +55,7 @@ export class Character {
     this.vel = new THREE.Vector3();
     this.yaw = 0;
     this.altitude = 0;
+    this.groundY = 0;      // height of the surface underfoot (kerbs, slabs, porches)
     this.hp = CONFIG.PLAYER_HP;
     this.maxHp = CONFIG.PLAYER_HP;
     this.alive = true;
@@ -225,6 +231,10 @@ export class Character {
 
   // ---------- state ----------
 
+  // World height of the feet — altitude above whatever surface is underfoot.
+  // Combat compares these so a flyer and a pedestrian can't trade blows.
+  get feetY() { return this.altitude + this.groundY; }
+
   get frozen() { return performance.now() / 1000 < this.frozenUntil; }
   freeze(dur) { this.frozenUntil = performance.now() / 1000 + dur; this.iceShell.visible = true; }
 
@@ -256,6 +266,13 @@ export class Character {
     if (!Number.isFinite(this.altitude)) this.altitude = 0;
     if (!Number.isFinite(this.pos.x + this.pos.z)) this.pos.set(0, 0, 0);
 
+    // ride up onto raised kerbs and slabs instead of sinking into them
+    if (WORLD) {
+      const target = WORLD.groundHeightAt(this.pos.x, this.pos.z);
+      const step = Math.abs(target - this.groundY);
+      this.groundY = step > 1.5 ? target : this.groundY + (target - this.groundY) * Math.min(1, dt * 16);
+    }
+
     this.curScale += (this.scaleTarget - this.curScale) * Math.min(1, dt * 5);
     this.group.scale.setScalar(this.curScale);
 
@@ -273,7 +290,7 @@ export class Character {
         this.rootMoved = true;
       }
     }
-    this.group.position.set(this.pos.x, this.altitude, this.pos.z);
+    this.group.position.set(this.pos.x, this.altitude + this.groundY, this.pos.z);
     this.group.rotation.y = this.yaw;
 
     const lift = this.altitude;

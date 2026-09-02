@@ -5,7 +5,7 @@ import { World } from './world.js';
 import { FX } from './fx.js';
 import { BamText } from './bam.js';
 import { Collectibles } from './collectibles.js';
-import { Character } from './entities.js';
+import { Character, setCharacterWorld } from './entities.js';
 import { Director } from './rtp.js';
 import { Controls } from './controls.js';
 import { UI } from './ui.js';
@@ -16,6 +16,13 @@ const now = () => performance.now() / 1000;
 const TK_COLOR = 0xc07bff;
 
 const finite3 = (v) => Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
+
+// Blows only connect between characters at the same height: a flyer overhead is
+// out of reach of someone on the pavement, and vice versa. The tolerance is
+// about one body, so two heroes passing mid-climb can still trade hits.
+const samePlane = (a, b) => Math.abs(a.feetY - b.feetY) <= CONFIG.HIT_Y_RANGE;
+// straight-line distance between a character's chest and a world point
+const chestDist = (ch, p) => Math.hypot(ch.pos.x - p.x, ch.feetY + 1.1 - p.y, ch.pos.z - p.z);
 
 // Camera positions are lerp accumulators: once one holds a NaN it keeps it for
 // the rest of the session and the scene renders black. Snap rather than blend
@@ -69,6 +76,7 @@ export class Game {
     this.baseFov = 68;
 
     this.world = new World(this.scene);
+    setCharacterWorld(this.world);
     this.fx = new FX(this.scene);
     this.bams = new BamText(this.scene);
     this.collectibles = new Collectibles(this.scene, this.world);
@@ -217,10 +225,11 @@ export class Game {
       let best = null, bestD = 24;
       for (const other of this.bots) {
         if (other === b || !other.ch.alive || other.ch.frozen || other.held) continue;
+        if (Math.abs(other.ch.feetY - ch.feetY) > 4) continue;   // can't reach them up there
         const d = ch.pos.distanceTo(other.ch.pos);
         if (d < bestD) { best = other; bestD = d; }
       }
-      if (playerTargetable && b.aggressive && !stalking) {
+      if (playerTargetable && b.aggressive && !stalking && Math.abs(this.player.ch.feetY - ch.feetY) < 4) {
         const dP = ch.pos.distanceTo(this.player.ch.pos);
         if (dP < 15 && dP < bestD) { b.target = 'player'; }
       }
@@ -299,7 +308,7 @@ export class Game {
         b.farT = 0;
       }
       // enlarged reinforcements crush on contact
-      if (ch.curScale > 1.5 && dP < 1.9 * ch.curScale && Math.abs(this.player.ch.altitude - ch.altitude) < 2.5) {
+      if (ch.curScale > 1.5 && dP < 1.9 * ch.curScale && samePlane(this.player.ch, ch)) {
         this.bam(this.player.ch.pos.x, 1.2 + this.player.ch.altitude, this.player.ch.pos.z, 'squish', 1.3);
         this.playerDeath(b);
         return;
@@ -327,7 +336,8 @@ export class Game {
     }
 
     // attack: play the archetype's move, land the hit on its impact frame
-    if (chasing && dist < ch.combat.range && b.attackCd <= 0 && ch.altitude < 1.5 && !ch.attacking) {
+    const victim = b.target === 'player' ? this.player?.ch : b.target?.ch;
+    if (chasing && dist < ch.combat.range && b.attackCd <= 0 && victim && samePlane(ch, victim) && !ch.attacking) {
       const mv = ch.startAttack();
       b.attackCd = mv.duration + rand(0.25, 0.7);
       // face the target for the swing
@@ -351,13 +361,15 @@ export class Game {
         if (!this.player?.ch.alive) continue;
         const d = att.ch.pos.distanceTo(this.player.ch.pos);
         const striking = att.hunter && this.director.phase === 'strike';
-        if (d < h.range + 0.6) this.damagePlayer(h.damage * (striking ? CONFIG.HUNTER_DAMAGE : 0.3), att);
+        if (d < h.range + 0.6 && samePlane(att.ch, this.player.ch)) {
+          this.damagePlayer(h.damage * (striking ? CONFIG.HUNTER_DAMAGE : 0.3), att);
+        }
         continue;
       }
       const tgt = h.target;
       if (!tgt || !tgt.ch?.alive || tgt.held) continue;
       const d = att.ch.pos.distanceTo(tgt.ch.pos);
-      if (d > h.range + 0.6) continue;
+      if (d > h.range + 0.6 || !samePlane(att.ch, tgt.ch)) continue;
       tgt.hp -= h.damage;
       tgt.ch.hitReaction();
       this.fx.emit(tgt.ch.pos.x, 1.4 + tgt.ch.altitude, tgt.ch.pos.z, { count: 6, color: 0xffffff, speed: 3.5, life: 0.3, size: 1.1 });
@@ -558,7 +570,7 @@ export class Game {
       const dx = b.ch.pos.x - ch.pos.x, dz = b.ch.pos.z - ch.pos.z;
       const d = Math.hypot(dx, dz);
       if (d > h.range + 0.6) continue;
-      if (Math.abs(b.ch.altitude - ch.altitude) > 3) continue;
+      if (!samePlane(b.ch, ch)) continue;
       const dot = (dx * fx + dz * fz) / (d || 1);
       if (d > 1.2 && dot < h.arc) continue;
       hitAny = true;
@@ -592,7 +604,7 @@ export class Game {
     P.fireballArmed = false;
     SFX.fireball();
     const dir = this._v1.set(Math.sin(ch.yaw), 0, Math.cos(ch.yaw)).clone();
-    const start = ch.pos.clone().setY(1.4 + ch.altitude);
+    const start = ch.pos.clone().setY(1.4 + ch.feetY);
     this.projectiles = this.projectiles || [];
     this.projectiles.push({ pos: start, dir, speed: 26, life: 2.2, r: 0 });
     this.fx.addShake(0.3);
@@ -609,18 +621,18 @@ export class Game {
       const fromBot = pr.owner === 'bot';
       if (fromBot && pr.homing && this.player?.ch.alive) {
         // hunters' fireballs curve toward the player so a dodge isn't free
-        const to = this._v1.set(this.player.ch.pos.x, 1.2 + this.player.ch.altitude, this.player.ch.pos.z).sub(pr.pos).normalize();
+        const P = this.player.ch;
+        const to = this._v1.set(P.pos.x, P.feetY + 1.1, P.pos.z).sub(pr.pos).normalize();
         pr.dir.lerp(to, Math.min(1, pr.homing * dt)).normalize();
       }
       const hitWall = this.world.isBlocked(pr.pos.x, pr.pos.z, 0.5) && this.world.buildingHeightAt(pr.pos.x, pr.pos.z) > pr.pos.y;
       let hitBot = false;
       if (!fromBot) {
         for (const b of this.bots) {
-          if (b.ch.alive && !b.held && b.ch.pos.distanceTo(pr.pos) < 1.6) { hitBot = true; break; }
+          if (b.ch.alive && !b.held && chestDist(b.ch, pr.pos) < 1.6) { hitBot = true; break; }
         }
       }
-      const hitPlayer = fromBot && this.player?.ch.alive &&
-        this._v1.set(this.player.ch.pos.x, 1.2 + this.player.ch.altitude, this.player.ch.pos.z).distanceTo(pr.pos) < 1.8;
+      const hitPlayer = fromBot && this.player?.ch.alive && chestDist(this.player.ch, pr.pos) < 1.8;
       if (pr.life <= 0 || hitWall || hitBot || hitPlayer) {
         SFX.explosion();
         this.fx.addShake(0.8);
@@ -629,12 +641,12 @@ export class Game {
         this.fx.ring(pr.pos.x, pr.pos.z, { color: 0xff7a3c, maxR: 8, dur: 0.6 });
         this.bam(pr.pos.x, pr.pos.y + 0.5, pr.pos.z, 'boom', 1.2);
         for (const b of [...this.bots]) {
-          if (b.ch.alive && b !== pr.bot && b.ch.pos.distanceTo(pr.pos) < 7.5) {
+          if (b.ch.alive && b !== pr.bot && chestDist(b.ch, pr.pos) < 7.5) {
             this.killBot(b, fromBot ? { byBot: pr.bot, cause: 'fire' } : { byPlayer: true, cause: 'fire' });
           }
         }
         if (fromBot && this.player?.ch.alive) {
-          const dP = this._v1.set(this.player.ch.pos.x, 1.2 + this.player.ch.altitude, this.player.ch.pos.z).distanceTo(pr.pos);
+          const dP = chestDist(this.player.ch, pr.pos);
           if (dP < 6) this.damagePlayer(dP < 2.5 ? 999 : 60, pr.bot);
         }
         this.projectiles.splice(i, 1);
@@ -897,7 +909,7 @@ export class Game {
     if (silent) {
       const tk = P.tk;
       if (tk.kind === 'bot' && tk.bot.ch.alive) { tk.bot.held = false; tk.bot.ch.altitude = 0; tk.bot.ch.setHeld(false); }
-      if (tk.kind === 'prop' && tk.prop.alive) { tk.prop.busy = false; tk.prop.mesh.position.y = 0; }
+      if (tk.kind === 'prop' && tk.prop.alive) { tk.prop.busy = false; tk.prop.mesh.position.y = tk.prop.baseY || 0; }
       P.tk = null;
       P.ch.stopCast();
     } else {
@@ -967,7 +979,7 @@ export class Game {
             th.bot.repath = 1.5;
             this.fx.emit(nx, 0.6, nz, { count: 8, color: 0xffffff, speed: 3, life: 0.3, size: 1.1 });
           } else {
-            th.prop.mesh.position.y = 0;
+            th.prop.mesh.position.y = this.world.groundHeightAt(nx, nz);
             th.prop.mesh.rotation.x = 0;
             th.prop.busy = false;
           }
@@ -1000,7 +1012,7 @@ export class Game {
     this.fx.emit(ch.pos.x, 0.6, ch.pos.z, { count: 60, color: 0xffd166, speed: 12, life: 0.8, size: 2.2 });
     this.bam(ch.pos.x, 1.6, ch.pos.z, 'boom', 1.3);
     for (const b of [...this.bots]) {
-      if (b.ch.alive && b.ch.pos.distanceTo(ch.pos) < 8.5) this.killBot(b, { byPlayer: true });
+      if (b.ch.alive && b.ch.pos.distanceTo(ch.pos) < 8.5 && samePlane(b.ch, ch)) this.killBot(b, { byPlayer: true });
     }
   }
 
@@ -1186,8 +1198,8 @@ export class Game {
 
   botFireball(b) {
     const P = this.player;
-    const from = b.ch.pos.clone().setY(1.4 + b.ch.altitude);
-    const to = P.ch.pos.clone().setY(1.2 + P.ch.altitude);
+    const from = b.ch.pos.clone().setY(1.4 + b.ch.feetY);
+    const to = P.ch.pos.clone().setY(1.2 + P.ch.feetY);
     const dir = to.sub(from).normalize();
     b.ch.yaw = Math.atan2(dir.x, dir.z);
     b.ch.cast('pyro');
@@ -1254,7 +1266,7 @@ export class Game {
     this.cancelTelekinesis(true);
     for (const th of this.thrown) {
       if (th.kind === 'bot' && th.bot.ch.alive) { th.bot.held = false; th.bot.ch.altitude = 0; th.bot.ch.setHeld(false); }
-      if (th.kind === 'prop' && th.prop.alive) { th.prop.busy = false; th.prop.mesh.position.y = 0; }
+      if (th.kind === 'prop' && th.prop.alive) { th.prop.busy = false; th.prop.mesh.position.y = th.prop.baseY || 0; }
     }
     this.thrown = [];
     this.pendingHits = [];
@@ -1346,7 +1358,7 @@ export class Game {
         if (!b.ch.alive || b.held) continue;
         const dx = b.ch.pos.x - ch.pos.x, dz = b.ch.pos.z - ch.pos.z;
         const d = Math.hypot(dx, dz);
-        if (d < 8.5 && (dx * fxd.x + dz * fxd.z) / (d || 1) > 0.72 && Math.abs(b.ch.altitude - ch.altitude) < 3) {
+        if (d < 8.5 && (dx * fxd.x + dz * fxd.z) / (d || 1) > 0.72 && samePlane(b.ch, ch)) {
           this.killBot(b, { byPlayer: true, cause: 'fire' });
         }
       }
@@ -1385,7 +1397,7 @@ export class Game {
     // giant crush: walking over bots while enlarged
     if (ch.curScale > 1.5) {
       for (const b of [...this.bots]) {
-        if (b.ch.alive && !b.held && b.ch.curScale < 1.5 && b.ch.pos.distanceTo(ch.pos) < 1.9 * ch.curScale && b.ch.altitude < 2) {
+        if (b.ch.alive && !b.held && b.ch.curScale < 1.5 && b.ch.pos.distanceTo(ch.pos) < 1.9 * ch.curScale && samePlane(b.ch, ch)) {
           this.killBot(b, { byPlayer: true, cause: 'squish' });
           this.fx.addShake(0.3);
         }

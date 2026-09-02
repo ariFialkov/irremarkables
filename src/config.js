@@ -33,6 +33,7 @@ export const CONFIG = {
   BOT_SPEED: 6.0,
   BOT_ATTACK_DPS: 16,
   BOT_ATTACK_RANGE: 2.6,
+  HIT_Y_RANGE: 2.4,        // vertical reach of a melee blow (a hero is ~1.85m)
 
   // ---- Hunters (how the director ends a round, disguised as normal play) ----
   STALK_FRACTION: 0.65,    // of the target: hunters start drifting toward the player

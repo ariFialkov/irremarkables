@@ -177,6 +177,14 @@ function cone4(list, r, h, x, y, z, hex) {
   list.push(paint(g, hex, 0.05));
 }
 
+function topOf(platforms, x, z) {
+  let y = 0;
+  for (const p of platforms) {
+    if (Math.abs(x - p.x) < p.hw && Math.abs(z - p.z) < p.hd) y = Math.max(y, p.top);
+  }
+  return y;
+}
+
 function blob(list, r, x, y, z, hex, detail = 1) {
   const g = new THREE.IcosahedronGeometry(r, detail);
   g.translate(x, y, z);
@@ -385,6 +393,7 @@ export class World {
     const ox = cx * PITCH, oz = cz * PITCH;
     const group = new THREE.Group();
     const colliders = [];
+    const platforms = [];
     const liftables = [];
     const vc = [];
     const towersCool = [];
@@ -397,9 +406,11 @@ export class World {
     group.add(ground);
 
     const addCollider = (x, z, hw, hd, h) => colliders.push({ x, z, hw, hd, h });
+    // raised surfaces you stand on top of rather than walk into
+    const addPlatform = (x, z, hw, hd, top) => platforms.push({ x, z, hw, hd, top });
 
-    if (theme === 'suburb') this.buildSuburbBlock(ox, oz, vc, liftables, addCollider);
-    else this.buildDowntownBlock(ox, oz, vc, towersCool, towersWarm, liftables, addCollider);
+    if (theme === 'suburb') this.buildSuburbBlock(ox, oz, vc, liftables, addCollider, addPlatform);
+    else this.buildDowntownBlock(ox, oz, vc, towersCool, towersWarm, liftables, addCollider, addPlatform);
 
     const addMerged = (geos, mat) => {
       if (!geos.length) return;
@@ -413,14 +424,17 @@ export class World {
     addMerged(towersWarm, this.towerMatWarm);
     for (const l of liftables) {
       l.mesh.castShadow = RUNTIME.shadows;
+      // props rest on whatever they were placed on, not on the bare ground plane
+      l.baseY = topOf(platforms, l.mesh.position.x, l.mesh.position.z);
+      l.mesh.position.y = l.baseY;
       group.add(l.mesh);
     }
 
     this.scene.add(group);
-    return { cx, cz, theme, group, colliders, liftables };
+    return { cx, cz, theme, group, colliders, platforms, liftables };
   }
 
-  buildSuburbBlock(ox, oz, vc, liftables, addCollider) {
+  buildSuburbBlock(ox, oz, vc, liftables, addCollider, addPlatform) {
     const B = CONFIG.BLOCK;
     const housePalette = [0xe8dcc8, 0xd9c1a8, 0xc3d5e6, 0xd7e2c1, 0xe2bfb6, 0xf0e6d0, 0xb8cfd9, 0xd9d0e8, 0xead9a8, 0xc9e2d4];
     const roofPalette = [0x8a4b3b, 0x5b6570, 0x71504a, 0x4f6b52, 0x815f3f, 0x3f4b5c];
@@ -440,7 +454,7 @@ export class World {
         const wall = pick(housePalette);
         const roof = pick(roofPalette);
         const kind = randInt(0, 4);
-        this.house(vc, cxp, czp, facing, wall, roof, kind, addCollider);
+        this.house(vc, cxp, czp, facing, wall, roof, kind, addCollider, addPlatform);
         // yard dressing
         if (Math.random() < 0.7) this.tree(vc, cxp + pick([-1, 1]) * rand(3.4, 4.6), czp + rand(-3.5, 3.5), rand(0.7, 1.3), addCollider);
         if (Math.random() < 0.5) blob(vc, rand(0.35, 0.6), cxp + rand(-4, 4), 0.35, czp + rand(-4, 4), pick([0x4f8f3a, 0x5da245, 0x3f7a30]));
@@ -458,11 +472,13 @@ export class World {
           // hedge row
           box(vc, 9, 0.7, 0.55, cxp, 0.4, streetZ, pick([0x3f7a30, 0x4f8f3a]), { shade: 0.12 });
         }
-        // mailbox by the curb
+        // mailbox on the lawn beside the front walk (the gap in the fence),
+        // kept inside the property line so it never lands out in the road
         if (Math.random() < 0.5) {
-          const mz = czp + (lz === 0 ? -1 : 1) * (B / 2 - 1.1);
-          box(vc, 0.09, 1.0, 0.09, cxp + 2.2, 0.5, mz, 0x5a4634);
-          box(vc, 0.34, 0.24, 0.5, cxp + 2.2, 1.1, mz, pick([0x9a3030, 0x3a66c2, 0x3a3d42]));
+          const mz = czp + (lz === 0 ? -1 : 1) * rand(3.2, 3.8);
+          const mx = cxp + pick([-1, 1]) * rand(1.0, 1.6);
+          box(vc, 0.09, 1.0, 0.09, mx, 0.5, mz, 0x5a4634);
+          box(vc, 0.34, 0.24, 0.5, mx, 1.1, mz, pick([0x9a3030, 0x3a66c2, 0x3a3d42]));
         }
       }
     }
@@ -470,7 +486,7 @@ export class World {
     if (Math.random() < 0.3) this.spawnBin(liftables, ox + pick([-1, 1]) * (B / 2 - 1), oz + rand(-B / 3, B / 3));
   }
 
-  house(vc, x, z, facing, wall, roof, kind, addCollider) {
+  house(vc, x, z, facing, wall, roof, kind, addCollider, addPlatform) {
     const sinF = Math.sin(facing), cosF = Math.cos(facing);
     const front = (dx, dz) => ({ x: x + dx * cosF + dz * sinF, z: z - dx * sinF + dz * cosF });
     const trim = new THREE.Color(wall).multiplyScalar(0.8).getHex();
@@ -532,6 +548,7 @@ export class World {
       // porch: slab + posts + little roof
       const p = front(0, d / 2 + 1.1);
       box(vc, w * 0.9, 0.22, 2.0, p.x, 0.13, p.z, 0xb7a184, { ry: facing });
+      addPlatform(p.x, p.z, w * 0.45, 1.0, 0.24);
       const postL = front(-w * 0.38, d / 2 + 1.9);
       const postR = front(w * 0.38, d / 2 + 1.9);
       box(vc, 0.14, 2.2, 0.14, postL.x, 1.1, postL.z, 0xe8e6df);
@@ -593,19 +610,22 @@ export class World {
     addCollider?.(x, z, 0.4 * s, 0.4 * s, 2.5 * s);
   }
 
-  buildDowntownBlock(ox, oz, vc, towersCool, towersWarm, liftables, addCollider) {
+  buildDowntownBlock(ox, oz, vc, towersCool, towersWarm, liftables, addCollider, addPlatform) {
     const B = CONFIG.BLOCK;
     const plaza = Math.random() < 0.16;
     box(vc, B, 0.14, B, ox, 0.07, oz, 0xa7abb2, { shade: 0.03 });
+    addPlatform(ox, oz, B / 2, B / 2, 0.14);
 
     if (plaza) {
       cylinder(vc, 1.6, 1.9, 0.5, 12, ox, 0.35, oz, 0x8d9299);
       cylinder(vc, 0.4, 0.5, 1.3, 8, ox, 1.0, oz, 0x9fb8c9);
       blob(vc, 0.42, ox, 1.75, oz, 0xbfe0f2);
+      addPlatform(ox, oz, 1.34, 1.34, 0.6);   // square inscribed in the fountain rim
       for (let i = 0; i < 3; i++) {
         const a = rand(0, Math.PI * 2), r = rand(4, 8);
         const tx = ox + Math.cos(a) * r, tz = oz + Math.sin(a) * r;
         box(vc, 1.8, 0.5, 1.8, tx, 0.35, tz, 0x7e838a);
+        addPlatform(tx, tz, 0.9, 0.9, 0.6);
         this.tree(vc, tx, tz, rand(0.6, 0.9), addCollider);
       }
       this.spawnBench(liftables, ox + rand(-5, 5), oz + rand(-5, 5), rand(0, Math.PI));
@@ -638,6 +658,7 @@ export class World {
       if (Math.random() < 0.45) {
         const tx = ox + pick([-1, 1]) * (B / 2 - 1.6), tz = oz + rand(-6, 6);
         box(vc, 1.4, 0.4, 1.4, tx, 0.28, tz, 0x7e838a);
+        addPlatform(tx, tz, 0.7, 0.7, 0.48);
         this.tree(vc, tx, tz, rand(0.5, 0.75), addCollider);
       }
     }
@@ -876,6 +897,20 @@ export class World {
       if (Math.abs(x - c.x) < c.hw + r && Math.abs(z - c.z) < c.hd + r) return true;
     }
     return false;
+  }
+
+  // Height of the walkable surface at (x, z): raised kerbs, block slabs,
+  // porches and planters, or 0 for open ground.
+  groundHeightAt(x, z) {
+    let y = 0;
+    const cx = Math.round(x / PITCH), cz = Math.round(z / PITCH);
+    for (let ix = cx - 1; ix <= cx + 1; ix++) {
+      for (let iz = cz - 1; iz <= cz + 1; iz++) {
+        const chunk = this.chunks.get(ix + ':' + iz);
+        if (chunk) y = Math.max(y, topOf(chunk.platforms, x, z));
+      }
+    }
+    return y;
   }
 
   buildingHeightAt(x, z) {
