@@ -30,6 +30,12 @@ export const CONFIG = {
   FLIGHT_CLIMB: 10,        // m/s up when something taller is in the way
   FLIGHT_DESCEND: 7,       // m/s back down once it's cleared
   FLIGHT_LOOKAHEAD: 9,     // metres ahead to look for tall structures
+  // ---- Superhero Landing potion: up, steer, meteor down ----
+  METEOR_APEX: 10,         // how high the pickup throws you
+  METEOR_UP_TIME: 0.45,    // seconds to reach the apex
+  METEOR_HANG_TIME: 0.9,   // seconds to steer at the top
+  METEOR_FALL_SPEED: 30,   // m/s on the way down
+  LANDING_RADIUS: 8.5,     // impact kill radius
   PLAYER_HP: 100,
   HP_REGEN: 4,             // hp per second
   SWITCHES_PER_GAME: 3,
@@ -76,6 +82,6 @@ export const CONFIG = {
   POTIONS: [
     { id: 'enlarge', name: 'Enlarge', emblem: '\u{1F9B9}', p: 0.40, duration: 15 },
     { id: 'fireball', name: 'Fireball', emblem: '\u{2604}', p: 0.40, duration: 0 },
-    { id: 'landing', name: 'Superhero Landing', emblem: '\u{1F4A5}', p: 0.20, duration: 25 },
+    { id: 'landing', name: 'Superhero Landing', emblem: '\u{1F4A5}', p: 0.20, duration: 0 },
   ],
 };

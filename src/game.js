@@ -491,7 +491,7 @@ export class Game {
       switchesLeft: CONFIG.SWITCHES_PER_GAME,
       cds: {}, flying: false,
       speedUntil: 0, invisUntil: 0, disguiseUntil: 0, xrayUntil: 0,
-      absorbUntil: 0, twoUntil: 0, enlargeUntil: 0, landingUntil: 0, ambushUntil: 0,
+      absorbUntil: 0, twoUntil: 0, enlargeUntil: 0, meteor: null, ambushUntil: 0,
       fireballArmed: false, flameUntil: 0,
       invulnUntil: now() + 2, adrenalineReady: now(),
       kills: 0, tokens: 0,
@@ -751,7 +751,6 @@ export class Game {
         ch.pos.set(nx, 0, nz);
         this.fx.emit(nx, py, nz, { count: 26, color: 0x7dffca, speed: 6, life: 0.5, size: 1.8 });
         this.fx.ring(nx, nz, { color: 0x7dffca, maxR: 4, dur: 0.45 });
-        if (P.landingUntil > t) this.superheroLanding();
         break;
       }
       case 'xray': {
@@ -1016,7 +1015,6 @@ export class Game {
 
   superheroLanding() {
     const P = this.player, ch = P.ch;
-    P.landingUntil = 0;
     ch.landing();
     SFX.landing();
     this.fx.addShake(1.1);
@@ -1026,7 +1024,7 @@ export class Game {
     this.fx.emit(ch.pos.x, 0.6, ch.pos.z, { count: 60, color: 0xffd166, speed: 12, life: 0.8, size: 2.2 });
     this.bam(ch.pos.x, 1.6, ch.pos.z, 'boom', 1.3);
     for (const b of [...this.bots]) {
-      if (b.ch.alive && b.ch.pos.distanceTo(ch.pos) < 8.5 && samePlane(b.ch, ch)) this.killBot(b, { byPlayer: true });
+      if (b.ch.alive && b.ch.pos.distanceTo(ch.pos) < CONFIG.LANDING_RADIUS && samePlane(b.ch, ch)) this.killBot(b, { byPlayer: true });
     }
   }
 
@@ -1059,7 +1057,13 @@ export class Game {
         P.fireballArmed = true;
         this.ui.announce('☄ FIREBALL ARMED — ATTACK TO LAUNCH', { dur: 2600 });
       } else if (it.def.id === 'landing') {
-        P.landingUntil = t + it.def.duration;
+        // straight up, a beat to steer, then down like a meteor onto whatever you aim at
+        P.meteor = { phase: 'up', t: 0, ringT: 0 };
+        this.cancelTelekinesis(true);
+        this.ui.announce('SUPERHERO LANDING — STEER YOUR DROP', { dur: 2200 });
+        SFX.whoosh();
+        this.fx.ring(P.ch.pos.x, P.ch.pos.z, { color: 0xffd166, maxR: 4, dur: 0.4 });
+        this.fx.emitDir(P.ch.pos.x, 0.5, P.ch.pos.z, this._v1.set(0, -1, 0), { count: 26, color: 0xffd166, speed: 7, life: 0.6, cone: 0.6 });
       }
     }
   }
@@ -1237,6 +1241,7 @@ export class Game {
     P.ch.alive = false;
     P.ch.vel.set(0, 0, 0);
     P.ch.flying = false;
+    P.meteor = null; P.ch.dive = false;
     P.ch.die(this.deathKindFor(P.ch, killer?.ch, 'attack'));
     this.state = 'dying';
     this.deathT = 0;
@@ -1322,7 +1327,7 @@ export class Game {
 
     // camera-relative movement: W/S along the view axis, joystick strafes
     const speedBoost = (P.speedUntil > t ? 2.4 : 1) * (P.enlargeUntil > t ? 1.2 : 1);
-    const flySpeed = P.flying ? 1.35 : 1;
+    const flySpeed = P.meteor ? 1.6 : P.flying ? 1.35 : 1;
     const spd = CONFIG.PLAYER_SPEED * speedBoost * flySpeed;
     const sin = Math.sin(this.camYaw), cos = Math.cos(this.camYaw);
     const mx = -input.moveX * cos + input.moveZ * sin;
@@ -1357,7 +1362,33 @@ export class Game {
     // flying pose while flight is on, and while gliding back down after it ends
     ch.flying = (P.flying && P.powerMain.id === 'flight') || (ch.flying && ch.altitude > 0.4);
     ch.bank += ((input.turn * 0.9 + input.look * 6) - ch.bank) * Math.min(1, dt * 4);
-    if (P.flying && P.powerMain.id === 'flight') {
+    if (P.meteor) {
+      const m = P.meteor;
+      m.t += dt;
+      ch.flying = true;   // float pose on the way up, prone dive on the way down
+      if (m.phase === 'up') {
+        ch.altitude = Math.min(CONFIG.METEOR_APEX, ch.altitude + dt * CONFIG.METEOR_APEX / CONFIG.METEOR_UP_TIME);
+        if (m.t >= CONFIG.METEOR_UP_TIME) { m.phase = 'hang'; m.t = 0; }
+      } else if (m.phase === 'hang') {
+        ch.altitude = CONFIG.METEOR_APEX + Math.sin(m.t * 6) * 0.15;
+        if (m.t >= CONFIG.METEOR_HANG_TIME) { m.phase = 'down'; m.t = 0; ch.dive = true; SFX.whoosh(); }
+      } else {
+        ch.altitude -= dt * CONFIG.METEOR_FALL_SPEED;
+        this.fx.emit(ch.pos.x, ch.altitude + 1, ch.pos.z, { count: 4, color: 0xffd166, speed: 2.5, life: 0.45, size: 2.2, gravity: -1 });
+        this.fx.emit(ch.pos.x, ch.altitude + 1, ch.pos.z, { count: 2, color: 0xff7a3c, speed: 2, life: 0.4, size: 1.8 });
+        if (ch.altitude <= 0) {
+          ch.altitude = 0;
+          ch.dive = false;
+          P.meteor = null;
+          this.superheroLanding();
+        }
+      }
+      // pulse the impact zone on the ground under you while you steer
+      if (P.meteor && m.phase !== 'up') {
+        m.ringT -= dt;
+        if (m.ringT <= 0) { m.ringT = 0.22; this.fx.ring(ch.pos.x, ch.pos.z, { color: 0xffd166, maxR: CONFIG.LANDING_RADIUS, dur: 0.3 }); }
+      }
+    } else if (P.flying && P.powerMain.id === 'flight') {
       // cruise at the flight deck, but climb over anything taller in the way and
       // settle back down once it's behind you
       const want = Math.max(CONFIG.FLIGHT_DECK, this.flightCeiling(ch, mx, mz));
@@ -1370,8 +1401,7 @@ export class Game {
     } else if (ch.altitude > 0) {
       ch.altitude = Math.max(0, ch.altitude - dt * 16);
       if (ch.altitude === 0 && P.prevAlt > 3.5) {
-        if (P.landingUntil > t) this.superheroLanding();
-        else { this.fx.ring(ch.pos.x, ch.pos.z, { color: 0xffffff, maxR: 3, dur: 0.4 }); this.fx.addShake(0.3); SFX.punch(); }
+        this.fx.ring(ch.pos.x, ch.pos.z, { color: 0xffffff, maxR: 3, dur: 0.4 }); this.fx.addShake(0.3); SFX.punch();
       }
     }
     this.world.resolve(ch.pos, 0.6 * ch.curScale, ch.altitude);
@@ -1652,7 +1682,6 @@ export class Game {
         if (P.absorbUntil > t) buffs.push({ emblem: '🧬', label: Math.ceil(P.absorbUntil - t) + 's' });
         if (P.twoUntil > t && P.secondPower) buffs.push({ icon: P.secondPower.id, label: Math.ceil(P.twoUntil - t) + 's' });
         if (P.enlargeUntil > t) buffs.push({ emblem: '🦹', label: Math.ceil(P.enlargeUntil - t) + 's' });
-        if (P.landingUntil > t) buffs.push({ emblem: '💥', label: Math.ceil(P.landingUntil - t) + 's' });
         if (P.fireballArmed) buffs.push({ emblem: '☄', label: 'armed' });
         if (P.invisUntil > t) buffs.push({ icon: 'invisibility', label: Math.ceil(P.invisUntil - t) + 's' });
         if (P.ch.propMesh) buffs.push({ icon: 'shapeshift', label: 'hidden' });

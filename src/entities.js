@@ -61,6 +61,7 @@ export class Character {
     this.turnRate = 0;     // smoothed yaw rate, drives the airborne body roll
     this.roll = 0;
     this.pitch = 0;
+    this.dive = false;     // head-first meteor drop
     this.hp = CONFIG.PLAYER_HP;
     this.maxHp = CONFIG.PLAYER_HP;
     this.alive = true;
@@ -314,9 +315,9 @@ export class Character {
     this.turnRate += (Math.max(-6, Math.min(6, yawRate)) - this.turnRate) * Math.min(1, dt * 6);
     const airborne = flying && this.altitude > 0.8;
     const wantRoll = airborne ? -Math.max(-0.6, Math.min(0.6, this.turnRate * 0.16)) : 0;
-    const wantPitch = airborne && !this.backward && speed > 1.6 ? -0.10 * Math.min(1, speed / 12) : 0;
+    const wantPitch = this.dive ? -1.15 : airborne && !this.backward && speed > 1.6 ? -0.10 * Math.min(1, speed / 12) : 0;
     this.roll += (wantRoll - this.roll) * Math.min(1, dt * 5);
-    this.pitch += (wantPitch - this.pitch) * Math.min(1, dt * 4);
+    this.pitch += (wantPitch - this.pitch) * Math.min(1, dt * (this.dive ? 9 : 4));
     if (this.body) this.body.rotation.set(this.pitch, 0, this.roll);
 
     const lift = this.altitude;
