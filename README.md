@@ -37,7 +37,32 @@ npm run dev       # local dev server
 npm run build     # generates PWA icons + font + production build in dist/
 npm run preview   # serve the production build
 npm run check     # verify dist/ contains only host-safe file types
+npm run catalog   # re-render the asset catalog (see below)
 ```
+
+## Asset catalog
+
+A browsable reference of every hero, building, prop, collectible, effect, icon
+and animation lives at **`/asset-catalog/`** on the deployed site
+(<https://arifialkov.github.io/irremarkables/asset-catalog/>). Each entry has
+renders from several angles, measured size, triangle count, materials, colour
+palette, variation rules, notes for a reskin and links to the source.
+
+The pictures are rendered by the game's own code, so they always match what the
+game draws. After changing any asset, regenerate and commit the output:
+
+```bash
+npm run catalog           # everything (about 30 s)
+npm run catalog -- hero   # only ids containing "hero"
+```
+
+`scripts/build-catalog.mjs` starts a Vite server, opens
+`scripts/catalog/render.html` in headless Chromium (Playwright), and writes
+`public/asset-catalog/catalog.json` plus `img/*.png`. Asset definitions,
+descriptions and camera views live in `scripts/catalog/render.js`. Run it from
+a clean commit so the source links point at that commit. Playwright is not a
+project dependency: install it once with `npm i -g playwright` and
+`npx playwright install chromium` if you do not have it.
 
 ## Deploying to your own host
 
@@ -54,7 +79,8 @@ dist/
 ├── manifest.json     PWA manifest (named .json, not .webmanifest)
 ├── sw.js             service worker — offline + installable
 ├── assets/           game bundle: one .js, one .css (font embedded inline)
-└── icons/            icon-192.png, icon-512.png
+├── icons/            icon-192.png, icon-512.png
+└── asset-catalog/    asset reference pages (optional; safe to leave out)
 ```
 
 `npm run build` ends by running `scripts/check-dist.mjs`, which fails the build

@@ -2,10 +2,10 @@ import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { rand, weightedPick } from './utils.js';
 
-const PILL_COLORS = { absorb: 0x3ddc97, twopower: 0xc07bff, extraswitch: 0x6ea8ff };
-const POTION_COLORS = { enlarge: 0xff8c42, fireball: 0xff4040, landing: 0xffd166 };
+export const PILL_COLORS = { absorb: 0x3ddc97, twopower: 0xc07bff, extraswitch: 0x6ea8ff };
+export const POTION_COLORS = { enlarge: 0xff8c42, fireball: 0xff4040, landing: 0xffd166 };
 
-function makePillMesh(color) {
+export function makePillMesh(color) {
   const g = new THREE.Group();
   const mat = new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.5 });
   const white = new THREE.MeshLambertMaterial({ color: 0xf2f4f8, emissive: 0xf2f4f8, emissiveIntensity: 0.25 });
@@ -17,7 +17,7 @@ function makePillMesh(color) {
   return g;
 }
 
-function makePotionMesh(color) {
+export function makePotionMesh(color) {
   const g = new THREE.Group();
   const glass = new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.55, transparent: true, opacity: 0.9 });
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 10), glass);
@@ -31,15 +31,22 @@ function makePotionMesh(color) {
   return g;
 }
 
+// the spinning coin every idle token is drawn with
+export function makeTokenParts() {
+  const geo = new THREE.CylinderGeometry(0.34, 0.34, 0.09, 14);
+  geo.rotateX(Math.PI / 2);
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffd166, emissive: 0xaa7a1e, emissiveIntensity: 0.6 });
+  return { geo, mat };
+}
+
 export class Collectibles {
   constructor(scene, world) {
     this.scene = scene;
     this.world = world;
 
     // ---- idle tokens (instanced coins) ----
-    const coinGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.09, 14);
-    coinGeo.rotateX(Math.PI / 2);
-    this.tokenMat = new THREE.MeshLambertMaterial({ color: 0xffd166, emissive: 0xaa7a1e, emissiveIntensity: 0.6 });
+    const { geo: coinGeo, mat: tokenMat } = makeTokenParts();
+    this.tokenMat = tokenMat;
     this.tokenMesh = new THREE.InstancedMesh(coinGeo, this.tokenMat, CONFIG.TOKEN_COUNT);
     this.tokenMesh.frustumCulled = false;
     scene.add(this.tokenMesh);

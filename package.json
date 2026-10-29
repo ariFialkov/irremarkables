@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "icons": "node scripts/gen-icons.mjs",
     "bake": "node scripts/bake-anims.mjs",
-    "check": "node scripts/check-dist.mjs"
+    "check": "node scripts/check-dist.mjs",
+    "catalog": "node scripts/build-catalog.mjs"
   },
   "dependencies": {
     "@fontsource/bangers": "^5.3.0",

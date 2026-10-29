@@ -197,6 +197,9 @@ function cylinder(list, rt, rb, h, seg, x, y, z, hex) {
   list.push(paint(g, hex, 0.05));
 }
 
+// geometry helpers, also used by the asset-catalog render harness
+export { paint, box, cone4, blob, cylinder };
+
 // smooth 2D value noise
 function hash2(i, j, seed) {
   const s = Math.sin(i * 127.1 + j * 311.7 + seed * 74.7) * 43758.5453;

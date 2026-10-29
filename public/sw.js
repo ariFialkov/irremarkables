@@ -1,6 +1,6 @@
 // Irremarkables service worker — cache-first for the app shell,
 // stale-while-revalidate for everything else same-origin.
-const VERSION = 'irr-v4';
+const VERSION = 'irr-v5';
 const SHELL = ['./', './index.html', './manifest.json', './anims.json'];
 
 self.addEventListener('install', (e) => {
@@ -18,6 +18,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  // the asset catalog is a separate reference page: always fetch it fresh
+  if (url.pathname.includes('/asset-catalog/')) return;
   e.respondWith(
     caches.open(VERSION).then(async (cache) => {
       const cached = await cache.match(e.request);
