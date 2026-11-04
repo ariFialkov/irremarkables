@@ -278,7 +278,20 @@ export class Character {
     return { move: name, duration: info.duration, hits: info.hits, damage: c.damage * info.hitScale, range: c.range, arc: c.arc };
   }
 
-  cast(powerId, hold = false) { this.anim.startCast(this.arch.cast || 'spell_cast', hold); }
+  cast(powerId, hold = false, opts) { this.anim.startCast(this.arch.cast || 'spell_cast', hold, opts); }
+
+  // Speed multiplier for steered movement during the current animation, and
+  // whether that movement may turn the hero. Moving once a move is past its
+  // cancel point cuts it short so the run takes over cleanly (no foot sliding).
+  // wantsMove: the controller is asking to move this frame.
+  motionGate(wantsMove) {
+    const g = this.anim.moveGate();
+    if (!g) return { scale: 1, turn: true, aim: false };
+    if (g.cancelable && wantsMove) { this.anim.cutShort(); return { scale: 1, turn: true, aim: false }; }
+    // airborne strikes keep some of their momentum instead of stopping dead
+    const air = this.flying && this.altitude > 0.8;
+    return { scale: air ? Math.max(0.5, g.scale) : g.scale, turn: false, aim: g.aim };
+  }
   stopCast() { this.anim.stopCast(); }
   hitReaction() { this.anim.hitReaction(); }
   setHeld(on) { if (on) this.anim.startHeld(); else this.anim.endHeld(); }

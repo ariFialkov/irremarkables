@@ -75,7 +75,8 @@ export class Animator {
   }
 
   // ---- overrides (full body, one-shot) ----
-  startOverride(name, { mode, timeScale = 1, end = 1, loop = false, fade = FADE } = {}) {
+  // cancelAt: clip time (s) after which moving may cut the rest of the move short
+  startOverride(name, { mode, timeScale = 1, end = 1, loop = false, fade = FADE, cancelAt = Infinity } = {}) {
     const a = this.action(name);
     if (!a) return null;
     if (this.over && this.over.action !== a) this.over.action.fadeOut(fade);
@@ -91,7 +92,7 @@ export class Animator {
     if (this.base) this.base.fadeOut(fade);
     const dur = ANIM.duration[name];
     const rx = ANIM.rootXZ[name];
-    this.over = { action: a, name, mode, end: end * dur, rootPrev: [rx[0], rx[1]], loop };
+    this.over = { action: a, name, mode, end: end * dur, rootPrev: [rx[0], rx[1]], loop, cancelAt };
     return { duration: (end * dur) / timeScale, rawDuration: dur, timeScale };
   }
 
@@ -133,7 +134,8 @@ export class Animator {
     const raw = ANIM.duration[name];
     const last = impacts.length ? impacts[impacts.length - 1] : raw * 0.5;
     const end = clamp((last + 0.38) / raw, 0.55, 0.95);
-    const info = this.startOverride(name, { mode: 'attack', timeScale: ts, end });
+    // planted until the last blow lands, then moving can cut the follow-through
+    const info = this.startOverride(name, { mode: 'attack', timeScale: ts, end, cancelAt: Math.min(last + 0.12, end * raw) });
     if (!info) return null;
     const hits = (impacts.length ? impacts : [raw * 0.5]).map((t) => t / ts);
     return { duration: info.duration, hits, hitScale: hits.length > 1 ? 0.6 : 1 };
@@ -143,18 +145,37 @@ export class Animator {
     if (this.dead || (this.over && (this.over.mode === 'attack' || this.over.mode === 'death'))) return;
     const names = ['reaction', 'reaction_2', 'reaction_3'].filter((n) => ANIM.clips[n]);
     if (!names.length) return;
-    this.startOverride(names[Math.floor(Math.random() * names.length)], { mode: 'hit', timeScale: 1.4, end: 0.55 });
+    const name = names[Math.floor(Math.random() * names.length)];
+    this.startOverride(name, { mode: 'hit', timeScale: 1.4, end: 0.55, cancelAt: 0.55 * ANIM.duration[name] * 0.5 });
   }
 
-  startCast(name, hold = false) {
+  // free: a quick buff the player can run out of at once (it only plays when standing)
+  startCast(name, hold = false, { free = false } = {}) {
     if (this.dead) return;
     if (hold) this.startOverride(name, { mode: 'cast', loop: true, timeScale: 1 });
-    else this.startOverride(name, { mode: 'cast', timeScale: 1.3, end: 0.9 });
+    else this.startOverride(name, { mode: 'cast', timeScale: 1.3, end: 0.9, cancelAt: free ? 0 : 0.9 * ANIM.duration[name] * 0.62 });
   }
   stopCast() { if (this.over && this.over.mode === 'cast') this.endOverride(); }
 
-  landing() { this.startOverride('superhero_landing', { mode: 'landing', timeScale: 1.2, end: 0.98 }); }
-  emote() { if (!this.busy) this.startOverride('fist_pump', { mode: 'emote', timeScale: 1, end: 0.6 }); }
+  landing() { this.startOverride('superhero_landing', { mode: 'landing', timeScale: 1.2, end: 0.98, cancelAt: 0.98 * ANIM.duration.superhero_landing * 0.7 }); }
+  emote() { if (!this.busy) this.startOverride('fist_pump', { mode: 'emote', timeScale: 1, end: 0.6, cancelAt: 0 }); }
+
+  // How far a full-body move lets the hero travel by steering. null when only
+  // locomotion is playing. Otherwise { scale, cancelable, aim }:
+  //   scale       fraction of normal speed still allowed (0 = planted)
+  //   cancelable  moving now may cut the rest of the move (see cutShort)
+  //   aim         a held channel: the hero may still turn to aim
+  moveGate() {
+    const o = this.over;
+    if (!o) return null;
+    return {
+      mode: o.mode,
+      scale: o.mode === 'hit' ? 0.3 : 0,   // a flinch staggers rather than stops
+      cancelable: !o.loop && o.mode !== 'death' && o.action.time >= o.cancelAt,
+      aim: o.mode === 'cast' && o.loop,
+    };
+  }
+  cutShort() { if (this.over && !this.over.loop && this.over.mode !== 'death') this.endOverride(0.14); }
 
   die(kind = 'back') {
     const name = kind === 'forward' ? 'falling_forward_death' : kind === 'fly' ? 'flying_back_death_3' : 'falling_back_death';

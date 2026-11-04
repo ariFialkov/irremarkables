@@ -57,6 +57,9 @@ const BAM_STYLE = {
   squish: { size: 1.25 },
 };
 
+// powers whose cast is a quick gesture you can run straight out of
+const QUICK_CASTS = new Set(['flight', 'speed', 'invisibility', 'teleport', 'xray', 'shapeshift']);
+
 export class Game {
   constructor(canvas) {
     this.canvas = canvas;
@@ -337,15 +340,19 @@ export class Game {
     if (ch.attacking && chasing) {
       ch.vel.set(0, 0, 0);
     } else if (dist > stopDist) {
-      const vx = (dx / dist) * speed, vz = (dz / dist) * speed;
+      // same rules as the player: no gliding through casts and flinches
+      const gate = ch.motionGate(true);
+      const vx = (dx / dist) * speed * gate.scale, vz = (dz / dist) * speed * gate.scale;
       ch.vel.set(vx, 0, vz);
       ch.pos.x += vx * dt;
       ch.pos.z += vz * dt;
-      const targetYaw = Math.atan2(vx, vz);
-      let dy = targetYaw - ch.yaw;
-      while (dy > Math.PI) dy -= Math.PI * 2;
-      while (dy < -Math.PI) dy += Math.PI * 2;
-      ch.yaw += dy * Math.min(1, dt * 8);
+      if (gate.turn) {
+        const targetYaw = Math.atan2(vx, vz);
+        let dy = targetYaw - ch.yaw;
+        while (dy > Math.PI) dy -= Math.PI * 2;
+        while (dy < -Math.PI) dy += Math.PI * 2;
+        ch.yaw += dy * Math.min(1, dt * 8);
+      }
       this.world.resolve(ch.pos, 0.55, ch.altitude);   // walls hold you until you're over them
     } else {
       ch.vel.set(0, 0, 0);
@@ -706,7 +713,8 @@ export class Game {
 
     const px = ch.pos.x, pz = ch.pos.z, py = 1.2 + ch.altitude;
     let used = true;
-    ch.cast(power.id);   // power-specific body language
+    // power-specific body language; quick buffs play only if you stand still
+    ch.cast(power.id, false, { free: QUICK_CASTS.has(power.id) });
 
     switch (power.id) {
       case 'flight': {
@@ -1343,19 +1351,38 @@ export class Game {
     const sin = Math.sin(this.camYaw), cos = Math.cos(this.camYaw);
     const mx = -input.moveX * cos + input.moveZ * sin;
     const mz = input.moveX * sin + input.moveZ * cos;
-    const moving = Math.hypot(mx, mz) > 0.05;
+    const wants = Math.hypot(mx, mz) > 0.05;
+
+    // Attacks, casts, flinches and landings move the body themselves (root
+    // motion), so steering is held back until they reach their cancel point.
+    const gate = ch.motionGate(wants);
+    let allow = gate.scale;
+    if (P.tk) allow = 0;                                  // channelling telekinesis: planted
+    else if (P.flameUntil > t) allow = Math.min(allow, 0.35);   // pouring flame: a slow walk
+    P.moveK = P.moveK ?? 1;
+    P.moveK += (allow - P.moveK) * Math.min(1, dt * (allow < P.moveK ? 18 : 8));
+    const moving = wants && P.moveK > 0.05;
 
     // a disguised prop that moves is just a hero again
     if (ch.propMesh && moving) this.revealDisguise();
 
-    ch.vel.set(mx * spd, 0, mz * spd);
+    ch.vel.set(mx * spd * P.moveK, 0, mz * spd * P.moveK);
     ch.pos.x += ch.vel.x * dt;
     ch.pos.z += ch.vel.z * dt;
     // backpedalling keeps you facing the camera and plays the backward clips
     // (a controller stick turns the hero to run any way, as in most action games)
     const backward = !input.free && input.moveZ < -0.2 && Math.abs(input.moveX) < 0.5;
-    ch.backward = backward && moving;
-    if (moving) {
+    ch.backward = backward && moving && gate.turn;
+    if (gate.aim || (P.flameUntil > t && !gate.turn && wants)) {
+      // holding telekinesis: turn to aim where the camera looks;
+      // pouring flame: the stick / keys sweep it slowly across the street
+      let dy = (gate.aim ? this.camYaw : Math.atan2(mx, mz)) - ch.yaw;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      ch.yaw += dy * Math.min(1, dt * (gate.aim ? 6 : 2.5));
+    } else if (!gate.turn) {
+      // mid-swing / mid-cast: committed to the direction the move started in
+    } else if (moving) {
       const targetYaw = backward ? this.camYaw : Math.atan2(mx, mz);
       let dy = targetYaw - ch.yaw;
       while (dy > Math.PI) dy -= Math.PI * 2;
@@ -1511,10 +1538,11 @@ export class Game {
         const dx = c.target.ch.pos.x - c.ch.pos.x, dz = c.target.ch.pos.z - c.ch.pos.z;
         const d = Math.hypot(dx, dz);
         if (d > 1.8) {
-          c.ch.vel.set((dx / d) * 8.5, 0, (dz / d) * 8.5);
+          const gate = c.ch.motionGate(true);
+          c.ch.vel.set((dx / d) * 8.5 * gate.scale, 0, (dz / d) * 8.5 * gate.scale);
           c.ch.pos.x += c.ch.vel.x * dt;
           c.ch.pos.z += c.ch.vel.z * dt;
-          c.ch.yaw = Math.atan2(dx, dz);
+          if (gate.turn) c.ch.yaw = Math.atan2(dx, dz);
           this.world.resolve(c.ch.pos, 0.55, 0);
         } else if (c.attackCd <= 0 && !c.ch.attacking) {
           const mv = c.ch.startAttack();
