@@ -127,9 +127,25 @@ export class UI {
     this.menu.classList.add('hidden');
     this.hud.classList.remove('hidden');
     this.results.classList.add('hidden');
-    $('keys-hint').style.display = isTouch ? 'none' : '';
+    this.isTouch = isTouch;
+    $('keys-hint').style.display = isTouch && !this.padOn ? 'none' : '';
     $('attack-btn').style.display = isTouch ? '' : 'none';
     $('killfeed').innerHTML = '';
+  }
+
+  // controller in use: show its buttons (PlayStation or Xbox names) instead of the keys
+  setPadMode(on, L) {
+    this.padOn = on;
+    const hint = $('keys-hint');
+    if (!this.keyHint) this.keyHint = hint.innerHTML;
+    if (on) {
+      hint.textContent = `LEFT STICK move \u00b7 RIGHT STICK camera \u00b7 ${L.attack} attack \u00b7 ${L.power} or ${L.ok} power (hold for telekinesis) \u00b7 ${L.switch} switch \u00b7 ${L.recenter} recenter camera`;
+    } else {
+      hint.innerHTML = this.keyHint;
+    }
+    if (!this.hud.classList.contains('hidden')) hint.style.display = this.isTouch && !on ? 'none' : '';
+    $('pad-hint').textContent = `${L.ok} choose \u00b7 ${L.back} back \u00b7 ${L.bet} bet \u00b7 ${L.start} drop in`;
+    $('pad-hint').classList.toggle('hidden', !on);
   }
 
   // ---------- HUD ----------

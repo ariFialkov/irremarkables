@@ -137,6 +137,9 @@ export class Game {
     this.controls.onPowerDown = () => this.powerDown();
     this.controls.onPowerUp = () => this.powerUp();
     this.controls.onSwitch = () => this.openSwitch();
+    // controller: rumble with the screen shake, swap the on-screen hints
+    this.fx.onShake = (a) => this.controls.pad.rumble(a);
+    this.controls.pad.onActiveChange = (on) => this.ui.setPadMode(on, this.controls.pad.labels);
 
     this.ui.showMenu(this.wallet);
     window.addEventListener('pointerdown', () => SFX.unlock(), { once: true });
@@ -1349,7 +1352,8 @@ export class Game {
     ch.pos.x += ch.vel.x * dt;
     ch.pos.z += ch.vel.z * dt;
     // backpedalling keeps you facing the camera and plays the backward clips
-    const backward = input.moveZ < -0.2 && Math.abs(input.moveX) < 0.5;
+    // (a controller stick turns the hero to run any way, as in most action games)
+    const backward = !input.free && input.moveZ < -0.2 && Math.abs(input.moveX) < 0.5;
     ch.backward = backward && moving;
     if (moving) {
       const targetYaw = backward ? this.camYaw : Math.atan2(mx, mz);
@@ -1533,6 +1537,13 @@ export class Game {
     const P = this.player, ch = P.ch;
     this.camYaw -= input.look + input.turn * 2.6 * dt;
     this.camPitch = clamp(this.camPitch + input.pitch, 0.12, 1.1);
+    if (input.recenter) {
+      // controller L2 / R3: swing the camera round behind the hero
+      let d = ch.yaw - this.camYaw;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      this.camYaw += d * Math.min(1, dt * 9);
+    }
     if (!Number.isFinite(this.camYaw)) this.camYaw = ch.yaw + Math.PI;
     if (!Number.isFinite(this.camPitch)) this.camPitch = 0.42;
     const scale = ch.curScale;

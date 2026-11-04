@@ -292,6 +292,16 @@ html, body {
   color: rgba(200,215,245,0.55); font-size: 11px; letter-spacing: 0.06em; white-space: nowrap;
 }
 
+.pad-hint {
+  margin-top: 6px; color: rgba(200,215,245,0.7); font-size: 11px; letter-spacing: 0.06em; text-align: center;
+}
+/* controller highlight: a bold comic outline on the focused menu item */
+.gp-focus {
+  outline: 3px solid #ffe45c !important;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgba(20,16,24,0.85), 0 0 22px rgba(255,228,92,0.7) !important;
+}
+
 .joystick { position: absolute; pointer-events: none; }
 .joy-base {
   position: absolute; width: 110px; height: 110px; border-radius: 50%;

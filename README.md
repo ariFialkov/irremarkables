@@ -26,6 +26,9 @@ Flight, Super Speed, Invisibility, Telekinesis, Pyrokinesis (rare), Cryokinesis 
 |---|---|---|---|---|---|---|
 | **Mobile** | dynamic joystick (touch anywhere) | joystick | ATTACK button | power button (hold for telekinesis) | SWITCH button | second finger drag |
 | **Desktop** | W / S | A / D | M | Space (hold for telekinesis) | Tab | mouse drag |
+| **Controller** | left stick (tilt to walk, push to run) | right stick | □ / X or R1 / RB | R2 / RT or ✕ / A (hold for telekinesis) | △ / Y | right stick; L2 / LT or R3 snaps it behind you |
+
+Any PlayStation or Xbox controller works over USB or Bluetooth in a current browser; press a button once so the browser notices it. Button names in the hints switch to match the controller. In the menus, use the D-pad or left stick to move, ✕ / A to choose, ○ / B to go back, L1 / R1 (LB / RB) to change the bet and Options / Menu to drop in. Hits, landings and damage rumble the controller where the browser supports it.
 
 Telekinesis is a channelled power: hold the power input to seize the nearest enemy or liftable prop (cars, benches, bins), reel it in, and hurl it in your aim direction. Release early and it drops on the spot.
 

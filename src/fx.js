@@ -148,7 +148,10 @@ export class FX {
     r.mesh.scale.setScalar(0.01);
   }
 
-  addShake(amt) { this.shakeAmt = Math.min(1.6, this.shakeAmt + amt); }
+  addShake(amt) {
+    this.shakeAmt = Math.min(1.6, this.shakeAmt + amt);
+    this.onShake?.(amt);   // controller rumble follows the screen shake
+  }
 
   update(dt) {
     // particles

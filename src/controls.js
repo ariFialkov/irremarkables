@@ -1,4 +1,5 @@
 import { clamp } from './utils.js';
+import { GamepadInput } from './gamepad.js';
 
 const JOY_RADIUS = 55;
 
@@ -25,6 +26,16 @@ export class Controls {
 
     this.joyEl = document.getElementById('joystick');
     this.knobEl = document.getElementById('joy-knob');
+
+    // game controller: same callbacks as the keyboard, plus menu navigation
+    this.pad = new GamepadInput();
+    this.padActions = {
+      attack: () => this.enabled && this.onAttack?.(),
+      powerDown: () => this.enabled && this.onPowerDown?.(),
+      powerUp: () => this.onPowerUp?.(),
+      switch: () => this.onSwitch?.(),
+    };
+    this.lastPoll = performance.now();
 
     this.bind();
   }
@@ -143,11 +154,26 @@ export class Controls {
         this.moveZ = z;
       }
     }
-    const look = this.lookDelta;
-    const pitch = this.pitchDelta;
+    let look = this.lookDelta;
+    let pitch = this.pitchDelta;
     this.lookDelta = 0;
     this.pitchDelta = 0;
-    return { moveX: this.moveX, moveZ: this.moveZ, turn, look, pitch };
+
+    // controller: plays when the HUD is up, drives the menus otherwise
+    const t = performance.now();
+    const dt = Math.min(0.1, (t - this.lastPoll) / 1000);
+    this.lastPoll = t;
+    const overlay = !document.getElementById('switch-overlay')?.classList.contains('hidden');
+    const pad = this.pad.update(dt, this.enabled && !overlay ? 'play' : 'nav', this.padActions);
+    let moveX = this.moveX, moveZ = this.moveZ, free = false;
+    if (pad.moveX || pad.moveZ) {
+      moveX = clamp(moveX + pad.moveX, -1, 1);
+      moveZ = clamp(moveZ + pad.moveZ, -1, 1);
+      free = true;   // stick movement: pulling back runs toward the camera
+    }
+    look += pad.look;
+    pitch += pad.pitch;
+    return { moveX, moveZ, turn, look, pitch, free, recenter: pad.recenter };
   }
 
   setEnabled(on) {
