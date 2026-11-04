@@ -23,9 +23,12 @@ varying float vAlpha;
 void main() {
   vec2 uv = gl_PointCoord - 0.5;
   float d = length(uv);
-  float a = smoothstep(0.5, 0.12, d) * vAlpha;
-  if (a < 0.01) discard;
-  gl_FragColor = vec4(vColor, a);
+  // cel spark: hard-edged disc with a bright core, no soft falloff
+  if (d > 0.48 || vAlpha < 0.01) discard;
+  float core = 1.0 - step(0.2, d);
+  vec3 col = mix(vColor, vec3(1.0), core * 0.65);
+  float a = vAlpha * (d > 0.4 ? 0.6 : 1.0);
+  gl_FragColor = vec4(col, a);
 }`;
 
 export class FX {
@@ -70,6 +73,12 @@ export class FX {
       );
       rg.rotation.x = -Math.PI / 2;
       rg.visible = false;
+      // ink rim just outside the shockwave
+      const ink = new THREE.Mesh(
+        new THREE.RingGeometry(1.0, 1.07, 40),
+        new THREE.MeshBasicMaterial({ color: 0x14121c, transparent: true, depthWrite: false, side: THREE.DoubleSide })
+      );
+      rg.add(ink);
       scene.add(rg);
       this.rings.push({ mesh: rg, t: 0, dur: 0, maxR: 0 });
     }
@@ -172,6 +181,7 @@ export class FX {
       const e = 1 - Math.pow(1 - k, 3);
       r.mesh.scale.setScalar(Math.max(0.01, r.maxR * e));
       r.mesh.material.opacity = 0.9 * (1 - k);
+      r.mesh.children[0].material.opacity = 0.75 * (1 - k);
     }
 
     // shake decay

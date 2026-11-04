@@ -40,6 +40,21 @@ npm run check     # verify dist/ contains only host-safe file types
 npm run catalog   # re-render the asset catalog (see below)
 ```
 
+## Cel-shaded reskin
+
+The game ships with a comic-book reskin: modelled heroes, houses, props and
+collectibles in `public/models/*.json` (glTF with embedded WebP textures,
+packed as `.json` so hosts accept them), cel shading and ink outlines from
+`src/toon.js`, and the loader in `src/authored.js`. Heroes are re-bound to the
+game's own Mixamo skeleton, so every animation clip still works.
+
+- Add `#original` to the URL to see the old procedural look, `?toon=0` to turn
+  off only the shading, `?models=0` to turn off only the models.
+- Add `#stats` to show fps, draw calls and triangles.
+- The handoff notes are in `docs/reskin-handoff.md`. The scripts used to build
+  the models are in `tools/reskin-pipeline/`. They are authoring tools, not
+  part of the build, and still contain the original author's machine paths.
+
 ## Asset catalog
 
 A browsable reference of every hero, building, prop, collectible, effect, icon
@@ -48,8 +63,8 @@ and animation lives at **`/asset-catalog/`** on the deployed site
 renders from several angles, measured size, triangle count, materials, colour
 palette, variation rules, notes for a reskin and links to the source.
 
-The pictures are rendered by the game's own code, so they always match what the
-game draws. After changing any asset, regenerate and commit the output:
+The pictures are rendered by the game's own code. They currently show the
+procedural originals from before the cel-shaded reskin, not the new models. After changing any asset, regenerate and commit the output:
 
 ```bash
 npm run catalog           # everything (about 30 s)
@@ -80,6 +95,7 @@ dist/
 ├── sw.js             service worker — offline + installable
 ├── assets/           game bundle: one .js, one .css (font embedded inline)
 ├── icons/            icon-192.png, icon-512.png
+├── models/           reskin models (glTF packed as .json)
 └── asset-catalog/    asset reference pages (optional; safe to leave out)
 ```
 

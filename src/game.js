@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { toonify, toonLights } from './toon.js';
+import { onAuthoredHero } from './authored.js';
 import { CONFIG } from './config.js';
 import { POWERS, counterPowerFor } from './powers.js';
 import { World } from './world.js';
@@ -72,10 +74,17 @@ export class Game {
     }
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(68, 1, 0.1, 600);
+    // far plane just past the fog end (142 m): nothing beyond it is visible anyway
+    this.camera = new THREE.PerspectiveCamera(68, 1, 0.1, 200);
     this.baseFov = 68;
 
     this.world = new World(this.scene);
+    toonLights(this.world, this.renderer);
+    // streamed hero models: swap anyone already wearing that look
+    onAuthoredHero((suit) => {
+      const all = [this.player?.ch, ...this.bots.map((b) => b.ch)].filter(Boolean);
+      for (const ch of all) if (ch.arch && ch.arch.suit === suit && ch.alive !== false) ch.refreshLook();
+    });
     setCharacterWorld(this.world);
     this.fx = new FX(this.scene);
     this.bams = new BamText(this.scene);
@@ -1033,8 +1042,7 @@ export class Game {
   applyItem(it) {
     const P = this.player, t = now();
     SFX.pickup();
-    const label = `${it.def.emblem} ${it.def.name.toUpperCase()}`;
-    this.ui.announce(label, { dur: 1800 });
+    this.ui.announce(it.def.name.toUpperCase(), { dur: 1800, buff: it.def.id });
     if (it.kind === 'pill') {
       if (it.def.id === 'absorb') P.absorbUntil = t + it.def.duration;
       else if (it.def.id === 'twopower') {
@@ -1679,10 +1687,10 @@ export class Game {
         this.lbTimer = 0.5;
         this.ui.leaderboard(this.leaderboardRows());
         const buffs = [];
-        if (P.absorbUntil > t) buffs.push({ emblem: '🧬', label: Math.ceil(P.absorbUntil - t) + 's' });
+        if (P.absorbUntil > t) buffs.push({ buff: 'absorb', label: Math.ceil(P.absorbUntil - t) + 's' });
         if (P.twoUntil > t && P.secondPower) buffs.push({ icon: P.secondPower.id, label: Math.ceil(P.twoUntil - t) + 's' });
-        if (P.enlargeUntil > t) buffs.push({ emblem: '🦹', label: Math.ceil(P.enlargeUntil - t) + 's' });
-        if (P.fireballArmed) buffs.push({ emblem: '☄', label: 'armed' });
+        if (P.enlargeUntil > t) buffs.push({ buff: 'enlarge', label: Math.ceil(P.enlargeUntil - t) + 's' });
+        if (P.fireballArmed) buffs.push({ buff: 'fireball', label: 'armed' });
         if (P.invisUntil > t) buffs.push({ icon: 'invisibility', label: Math.ceil(P.invisUntil - t) + 's' });
         if (P.ch.propMesh) buffs.push({ icon: 'shapeshift', label: 'hidden' });
         if (P.tk) buffs.push({ icon: 'telekinesis', label: 'hold' });
@@ -1699,6 +1707,7 @@ export class Game {
       }
     }
 
+    toonify(this.scene, this.camera, this.renderer);
     this.renderer.render(this.scene, this.camera);
   }
 
