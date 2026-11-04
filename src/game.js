@@ -577,12 +577,12 @@ export class Game {
     if (this.state !== 'playing' || !this.player?.ch.alive) return;
     const P = this.player, ch = P.ch;
 
+    // strike the way the hero is heading: snap to the steering direction if
+    // you're moving, otherwise keep facing wherever the hero already faces
+    if (P.moveDir != null && !ch.attacking) ch.yaw = P.moveDir;
     if (P.fireballArmed) { this.launchFireball(); return; }
     if (ch.attacking) return;   // one swing at a time — archetype speed sets the cadence
     if (ch.propMesh) this.revealDisguise(true);   // the "prop" springs to life
-
-    // aim the swing where the camera looks
-    ch.yaw = this.camYaw;
     const mv = ch.startAttack();
     SFX.whoosh();
     for (const at of mv.hits) {
@@ -908,9 +908,8 @@ export class Game {
         const step = CONFIG.TK_PULL_SPEED * dt;
         this.tkSetPos(tk, pos.x + (dx / d) * step, bobY, pos.z + (dz / d) * step);
       } else {
-        // in range — hurl it where the player is aiming (camera direction)
-        const aim = this.camYaw;
-        ch.yaw = aim;
+        // in range — hurl it the way the hero faces (steer while holding to aim)
+        const aim = ch.yaw;
         const vel = new THREE.Vector3(Math.sin(aim) * CONFIG.TK_THROW_SPEED, 1.5, Math.cos(aim) * CONFIG.TK_THROW_SPEED);
         this.thrown.push({ kind: tk.kind, bot: tk.bot, prop: tk.prop, vel, mode: 'throw', spin: rand(3, 7) });
         P.cds['telekinesis'] = now() + this.playerMainPower().cooldown;
@@ -1362,6 +1361,9 @@ export class Game {
     P.moveK = P.moveK ?? 1;
     P.moveK += (allow - P.moveK) * Math.min(1, dt * (allow < P.moveK ? 18 : 8));
     const moving = wants && P.moveK > 0.05;
+    // where the player is steering (not while backpedalling, which faces ahead)
+    const backpedal = !input.free && input.moveZ < -0.2 && Math.abs(input.moveX) < 0.5;
+    P.moveDir = wants && !backpedal ? Math.atan2(mx, mz) : null;
 
     // a disguised prop that moves is just a hero again
     if (ch.propMesh && moving) this.revealDisguise();
@@ -1371,12 +1373,12 @@ export class Game {
     ch.pos.z += ch.vel.z * dt;
     // backpedalling keeps you facing the camera and plays the backward clips
     // (a controller stick turns the hero to run any way, as in most action games)
-    const backward = !input.free && input.moveZ < -0.2 && Math.abs(input.moveX) < 0.5;
+    const backward = backpedal;
     ch.backward = backward && moving && gate.turn;
-    if (gate.aim || (P.flameUntil > t && !gate.turn && wants)) {
-      // holding telekinesis: turn to aim where the camera looks;
-      // pouring flame: the stick / keys sweep it slowly across the street
-      let dy = (gate.aim ? this.camYaw : Math.atan2(mx, mz)) - ch.yaw;
+    if ((gate.aim || (P.flameUntil > t && !gate.turn)) && wants) {
+      // holding telekinesis / pouring flame: planted, but steering turns the
+      // hero to aim (quickly for telekinesis, a slow sweep for the flame)
+      let dy = Math.atan2(mx, mz) - ch.yaw;
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
       ch.yaw += dy * Math.min(1, dt * (gate.aim ? 6 : 2.5));

@@ -30,7 +30,7 @@ Flight, Super Speed, Invisibility, Telekinesis, Pyrokinesis (rare), Cryokinesis 
 
 Any PlayStation or Xbox controller works over USB or Bluetooth in a current browser; press a button once so the browser notices it. Button names in the hints switch to match the controller. In the menus, use the D-pad or left stick to move, ✕ / A to choose, ○ / B to go back, L1 / R1 (LB / RB) to change the bet and Options / Menu to drop in. Hits, landings and damage rumble the controller where the browser supports it.
 
-Telekinesis is a channelled power: hold the power input to seize the nearest enemy or liftable prop (cars, benches, bins), reel it in, and hurl it in your aim direction. Release early and it drops on the spot.
+Telekinesis is a channelled power: hold the power input to seize the nearest enemy or liftable prop (cars, benches, bins), reel it in, and hurl it the way your hero is facing (steer while holding to aim). Release early and it drops on the spot.
 
 ## Development
 

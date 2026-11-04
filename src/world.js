@@ -78,6 +78,30 @@ function makeCloudTexture() {
 }
 
 // One ground tile per theme (road margins + sidewalk ring + interior).
+// Corner radius of the kerb at every block corner (m). The painted kerb, the
+// raised downtown slab and its walkable platform all share it.
+const CORNER_R = 2.4;
+
+// Outline of a block (side B, centred) with the kerb's rounded corners.
+function blockShape(B) {
+  const h = B / 2, r = CORNER_R, s = new THREE.Shape();
+  s.moveTo(-h + r, -h);
+  s.lineTo(h - r, -h); s.absarc(h - r, -h + r, r, -Math.PI / 2, 0, false);
+  s.lineTo(h, h - r); s.absarc(h - r, h - r, r, 0, Math.PI / 2, false);
+  s.lineTo(-h + r, h); s.absarc(-h + r, h - r, r, Math.PI / 2, Math.PI, false);
+  s.lineTo(-h, -h + r); s.absarc(-h + r, -h + r, r, Math.PI, Math.PI * 1.5, false);
+  return s;
+}
+
+function roundRectPath(g, x, y, w, h, r) {
+  g.moveTo(x + r, y);
+  g.lineTo(x + w - r, y); g.arc(x + w - r, y + r, r, -Math.PI / 2, 0);
+  g.lineTo(x + w, y + h - r); g.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
+  g.lineTo(x + r, y + h); g.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
+  g.lineTo(x, y + r); g.arc(x + r, y + r, r, Math.PI, Math.PI * 1.5);
+  g.closePath();
+}
+
 function makeGroundTile(theme) {
   // Comic-style painted ground, 1024 px per 30 m chunk (~34 px/m). Anything
   // that crosses a tile edge (road grain, dashes) is either random speckle or
@@ -133,56 +157,66 @@ function makeGroundTile(theme) {
     for (let i = 0; i < 90; i++) blob(rand(0, S), rand(0, S), 2.2, ['#ffffff', '#ffe36b', '#ff9ec7', '#c9a7ff'][randInt(0, 3)]);
   }
 
-  // ---- sidewalk ring: paving slabs with grout ----
-  const side = theme === 'downtown' ? [196, 199, 205] : [208, 202, 190];
-  const slabsAlong = 18;
-  const drawWalk = (x0, y0, w, h, horiz) => {
-    g.fillStyle = 'rgb(120,118,115)'; g.fillRect(x0, y0, w, h);
-    const n = slabsAlong, len = (horiz ? w : h) / n;
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < 2; j++) {
-        const l = rand(-12, 8);
-        g.fillStyle = `rgb(${side[0] + l},${side[1] + l},${side[2] + l})`;
-        const a = i * len + 1.5, b = j * (horiz ? h : w) / 2 + 1.5;
-        const sw = len - 3, sh = (horiz ? h : w) / 2 - 3;
-        if (horiz) g.fillRect(x0 + a, y0 + b, sw, sh); else g.fillRect(x0 + b, y0 + a, sh, sw);
-        if (Math.random() < 0.12) {
-          const cx = horiz ? x0 + a + rand(4, sw - 4) : x0 + b + rand(4, sh - 4);
-          const cy = horiz ? y0 + b + rand(4, sh - 4) : y0 + a + rand(4, sw - 4);
-          crack(cx, cy, rand(8, 18), 1.2, 'rgba(60,58,55,0.55)');
-        }
-      }
-    }
+  // ---- sidewalk: one lane of big poured-concrete slabs, edged by a kerb ----
+  // The kerb stone is the outer (road-side) strip of the sidewalk and turns
+  // every block corner on a CORNER_R radius, like a real kerb return.
+  const R = CORNER_R * px;
+  const ring = (inset) => roundRectPath(g, roadW + inset, roadW + inset, S - 2 * (roadW + inset), S - 2 * (roadW + inset), Math.max(0, R - inset));
+  const side = theme === 'downtown' ? [192, 195, 200] : [206, 201, 190];
+  g.save();
+  g.beginPath(); ring(kerbW); g.rect(inner.x, inner.y, inner.w, inner.w); g.clip('evenodd');
+  g.fillStyle = 'rgb(118,116,114)'; g.fillRect(0, 0, S, S);               // joint / grout colour
+  const slab = (x, y, w, h) => {
+    const l = rand(-11, 7);
+    g.fillStyle = `rgb(${side[0] + l},${side[1] + l},${side[2] + l})`;
+    g.fillRect(x + 1.5, y + 1.5, w - 3, h - 3);
+    // trowelled finish: faint speckle, a light leading edge, the odd stain or crack
+    for (let i = 0; i < (w * h) / 60; i++) { g.fillStyle = `rgba(${Math.random() < 0.5 ? '255,255,255' : '60,58,55'},${rand(0.04, 0.1)})`; g.fillRect(x + rand(2, w - 4), y + rand(2, h - 4), 2, 2); }
+    g.fillStyle = 'rgba(255,255,255,0.18)'; g.fillRect(x + 2, y + 2, w - 4, 2); g.fillRect(x + 2, y + 2, 2, h - 4);
+    if (Math.random() < 0.1) blob(x + rand(8, w - 8), y + rand(8, h - 8), rand(5, 10), 'rgba(80,76,70,0.14)');
+    if (Math.random() < 0.14) crack(x + rand(6, w - 6), y + rand(6, h - 6), rand(10, 24), 1.3, 'rgba(60,58,55,0.55)');
   };
-  drawWalk(roadW, roadW, S - roadW * 2, walkW, true);
-  drawWalk(roadW, S - roadW - walkW, S - roadW * 2, walkW, true);
-  drawWalk(roadW, roadW, walkW, S - roadW * 2, false);
-  drawWalk(S - roadW - walkW, roadW, walkW, S - roadW * 2, false);
+  const band = walkW - kerbW;                       // slab depth across the sidewalk
+  const run = (from, to, place) => {                // slabs ~1.5 m long along one side
+    const n = Math.max(1, Math.round((to - from) / (1.5 * px)));
+    const len = (to - from) / n;
+    for (let i = 0; i < n; i++) place(from + i * len, len);
+  };
+  const a0 = roadW, a1 = S - roadW, b0 = roadW + walkW, b1 = S - roadW - walkW;
+  // the four corner squares are single slabs (their outer edge follows the kerb curve)
+  for (const [cx, cy] of [[a0, a0], [b1, a0], [a0, b1], [b1, b1]]) slab(cx, cy, walkW, walkW);
+  run(b0, b1, (u, len) => { slab(u, a0 + kerbW, len, band); slab(u, b1, len, band); });          // top, bottom
+  run(b0, b1, (u, len) => { slab(a0 + kerbW, u, band, len); slab(b1, u, band, len); });          // left, right
+  g.restore();
   // ink line where the sidewalk meets the lot
   g.strokeStyle = 'rgba(22,20,30,0.45)'; g.lineWidth = 2.5;
   g.strokeRect(inner.x, inner.y, inner.w, inner.w);
 
-  // ---- asphalt margins ----
-  g.fillStyle = '#3a3d47';
-  g.fillRect(0, 0, S, roadW); g.fillRect(0, S - roadW, S, roadW);
-  g.fillRect(0, 0, roadW, S); g.fillRect(S - roadW, 0, roadW, S);
-  const onRoad = () => { const a = rand(0, S), b = rand(0, roadW) + (Math.random() < 0.5 ? 0 : S - roadW); return Math.random() < 0.5 ? [a, b] : [b, a]; };
+  // ---- asphalt: everything outside the kerb line, including the corner returns ----
   g.save();
-  g.beginPath(); g.rect(0, 0, S, roadW); g.rect(0, S - roadW, S, roadW); g.rect(0, 0, roadW, S); g.rect(S - roadW, 0, roadW, S); g.clip();
+  g.beginPath(); g.rect(0, 0, S, S); ring(0); g.clip('evenodd');
+  g.fillStyle = '#3a3d47'; g.fillRect(0, 0, S, S);
+  const onRoad = () => { const a = rand(0, S), b = rand(0, roadW + R) + (Math.random() < 0.5 ? 0 : S - roadW - R); return Math.random() < 0.5 ? [a, b] : [b, a]; };
   for (let i = 0; i < 60; i++) { const [x, y] = onRoad(); blob(x, y, rand(20, 60), Math.random() < 0.5 ? 'rgba(80,84,96,0.22)' : 'rgba(25,26,32,0.22)'); }
   for (let i = 0; i < 14; i++) { const [x, y] = onRoad(); blob(x, y, rand(8, 18), 'rgba(15,15,22,0.35)'); }  // oil stains
   for (let i = 0; i < 9000; i++) { const [x, y] = onRoad(); g.fillStyle = `rgba(${Math.random() < 0.6 ? '255,255,255' : '0,0,0'},${rand(0.03, 0.09)})`; g.fillRect(x, y, rand(1, 3), rand(1, 3)); }
   for (let i = 0; i < 18; i++) { const [x, y] = onRoad(); if (x > 30 && x < S - 30 && y > 30 && y < S - 30) crack(x, y, rand(20, 60), 1.6, 'rgba(14,14,20,0.7)'); }
+  // gutter: a soft dark line along the foot of the kerb
+  g.strokeStyle = 'rgba(15,15,22,0.32)'; g.lineWidth = 9;
+  g.beginPath(); ring(0); g.stroke();
   g.restore();
 
-  // ---- kerb: light curb stone with an ink edge on the road side ----
-  g.fillStyle = '#d9d6cf';
-  g.fillRect(roadW - kerbW, roadW - kerbW, S - 2 * (roadW - kerbW), kerbW);
-  g.fillRect(roadW - kerbW, S - roadW, S - 2 * (roadW - kerbW), kerbW);
-  g.fillRect(roadW - kerbW, roadW - kerbW, kerbW, S - 2 * (roadW - kerbW));
-  g.fillRect(S - roadW, roadW - kerbW, kerbW, S - 2 * (roadW - kerbW));
-  g.strokeStyle = INK; g.lineWidth = 3;
-  g.strokeRect(roadW - kerbW, roadW - kerbW, S - 2 * (roadW - kerbW), S - 2 * (roadW - kerbW));
+  // ---- kerb stone: light band on the road edge of the sidewalk, inked drop ----
+  g.save();
+  g.beginPath(); ring(0); ring(kerbW); g.clip('evenodd');
+  g.fillStyle = '#dedad2'; g.fillRect(0, 0, S, S);
+  g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 2;   // sunlit top arris
+  g.beginPath(); ring(kerbW * 0.35); g.stroke();
+  g.restore();
+  g.strokeStyle = 'rgba(70,66,60,0.55)'; g.lineWidth = 1.5;     // joint between kerb and slabs
+  g.beginPath(); ring(kerbW); g.stroke();
+  g.strokeStyle = INK; g.lineWidth = 3;                            // the drop down to the road
+  g.beginPath(); ring(0); g.stroke();
 
   // ---- road markings, slightly worn ----
   const worn = (fill, x, y, w, h) => {
@@ -190,15 +224,21 @@ function makeGroundTile(theme) {
     // a few soft scuffs, not a dot pattern
     for (let i = 0; i < (w * h) / 900; i++) blob(x + rand(0, w), y + rand(0, h), rand(2, 6), 'rgba(58,61,71,0.22)');
   };
+  const cwLen = roadW * 0.8, stripe = 0.55 * px;
+  const cwStart = roadW + walkW + 1.2 * px, cwEnd = cwStart + 9 * stripe;
+  // centre-line dashes run only between the crosswalk and the next junction's
+  // stop line, never through a crossing or across the intersection itself
   const dashL = 2.6 * px, gap = 2.6 * px, lw = 0.35 * px;
-  for (let d = gap; d < S - dashL; d += dashL + gap) {
+  const dash0 = cwEnd + 0.8 * px, dash1 = S - roadW - 1.2 * px;
+  const nD = Math.max(1, Math.floor((dash1 - dash0 + gap) / (dashL + gap)));
+  const lead = dash0 + (dash1 - dash0 - (nD * dashL + (nD - 1) * gap)) / 2;   // centre the run
+  for (let i = 0; i < nD; i++) {
+    const d = lead + i * (dashL + gap);
     worn('rgb(238,200,80)', d, 0, dashL, lw); worn('rgb(238,200,80)', d, S - lw, dashL, lw);
     worn('rgb(238,200,80)', 0, d, lw, dashL); worn('rgb(238,200,80)', S - lw, d, lw, dashL);
   }
-  const cwLen = roadW * 0.8, stripe = 0.55 * px;
   for (let s2 = 0; s2 < 5; s2++) {
-    const off = roadW + walkW + 1.2 * px + s2 * stripe * 2;
-    if (off > roadW + walkW + 8 * px) break;
+    const off = cwStart + s2 * stripe * 2;
     worn('rgb(236,236,240)', off, roadW * 0.1, stripe, cwLen);
     worn('rgb(236,236,240)', off, S - roadW * 0.9, stripe, cwLen);
     worn('rgb(236,236,240)', roadW * 0.1, off, cwLen, stripe);
@@ -246,7 +286,14 @@ function cone4(list, r, h, x, y, z, hex) {
 function topOf(platforms, x, z) {
   let y = 0;
   for (const p of platforms) {
-    if (Math.abs(x - p.x) < p.hw && Math.abs(z - p.z) < p.hd) y = Math.max(y, p.top);
+    const ax = Math.abs(x - p.x), az = Math.abs(z - p.z);
+    if (ax >= p.hw || az >= p.hd) continue;
+    if (p.r) {
+      // rounded corner: outside the quarter circle is road, not slab
+      const ex = ax - (p.hw - p.r), ez = az - (p.hd - p.r);
+      if (ex > 0 && ez > 0 && ex * ex + ez * ez > p.r * p.r) continue;
+    }
+    y = Math.max(y, p.top);
   }
   return y;
 }
@@ -495,7 +542,8 @@ export class World {
 
     const addCollider = (x, z, hw, hd, h) => colliders.push({ x, z, hw, hd, h });
     // raised surfaces you stand on top of rather than walk into
-    const addPlatform = (x, z, hw, hd, top) => platforms.push({ x, z, hw, hd, top });
+    // r: optional corner radius (the rounded downtown slab)
+    const addPlatform = (x, z, hw, hd, top, r = 0) => platforms.push({ x, z, hw, hd, top, r });
 
     if (theme === 'suburb') this.buildSuburbBlock(ox, oz, vc, liftables, addCollider, addPlatform);
     else this.buildDowntownBlock(ox, oz, vc, towersCool, towersWarm, liftables, addCollider, addPlatform);
@@ -824,16 +872,25 @@ export class World {
   buildDowntownBlock(ox, oz, vc, towersCool, towersWarm, liftables, addCollider, addPlatform) {
     const B = CONFIG.BLOCK;
     const plaza = Math.random() < 0.16;
-    box(vc, B, 0.14, B, ox, 0.07, oz, 0xa7abb2, { shade: 0.03 });
-    addPlatform(ox, oz, B / 2, B / 2, 0.14);
+    // raised block slab with rounded corners matching the painted kerb returns
+    if (!this.slabGeo) {
+      const g = new THREE.ExtrudeGeometry(blockShape(B), { depth: 0.14, bevelEnabled: false, curveSegments: 6 });
+      g.rotateX(-Math.PI / 2);   // keeps its uv: merged with the other block geometry
+      this.slabGeo = g;
+    }
+    const slab = this.slabGeo.clone();
+    slab.translate(ox, 0, oz);
+    vc.push(paint(slab, 0xa7abb2, 0.03));
+    addPlatform(ox, oz, B / 2, B / 2, 0.14, CORNER_R);
     // painted plaza paving on top of the raised slab: reuses the inner part
     // of the downtown ground texture (one shared plane + material)
     if (vc.extra) {
       if (!this.slabTopGeo) {
-        const g = new THREE.PlaneGeometry(B, B);
+        const g = new THREE.ShapeGeometry(blockShape(B), 6);
+        // map the block's own extent onto the inner part of the downtown tile
+        const m = (CONFIG.ROAD / 2) / PITCH, uv = g.attributes.uv, pos = g.attributes.position;
+        for (let i = 0; i < uv.count; i++) uv.setXY(i, m + (pos.getX(i) / B + 0.5) * (1 - 2 * m), m + (pos.getY(i) / B + 0.5) * (1 - 2 * m));
         g.rotateX(-Math.PI / 2);
-        const m = (CONFIG.ROAD / 2) / PITCH, uv = g.attributes.uv;
-        for (let i = 0; i < uv.count; i++) uv.setXY(i, m + uv.getX(i) * (1 - 2 * m), m + uv.getY(i) * (1 - 2 * m));
         this.slabTopGeo = g;
       }
       const top = new THREE.Mesh(this.slabTopGeo, this.groundMats.downtown);

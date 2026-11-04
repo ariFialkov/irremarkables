@@ -78,9 +78,10 @@ export class GamepadInput {
 
   pad() {
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    // switch to whichever pad has a button down, so a second controller can take over
+    // switch to whichever pad has a button down or a stick pushed, so a second
+    // controller can take over (and a stick alone is enough to start using one)
     for (const p of pads) {
-      if (p && p.index !== this.index && p.buttons.some((b) => b.pressed)) {
+      if (p && p.index !== this.index && (p.buttons.some((b) => b.pressed) || p.axes.some((a) => Math.abs(a) > 0.5))) {
         this.index = p.index; this.prev = [];
       }
     }
