@@ -93,3 +93,28 @@ Apply on top of commit b15d368: `git apply reskin.patch` (checked with `git appl
 
 ## Textures as separate files (optional)
 `authored.js` loads a pack's texture either embedded (`data:` URI, the default, which suits a host that only allows .json/.png) or as an image file next to the pack. For hosts that review media (the Claude artifact's public sharing does), run `python3 pipeline/extract_tex.py dist/models` after `vite build`. It writes `models/tex/<pack>.webp` and points each pack at it.
+
+## Comic VFX pass (`src/fx.js`)
+- **Particles:** every particle is now an opaque flat shape with an ink outline and two-tone cel shading. Additive glow is gone, so effects no longer wash out to white when they overlap. Particles step through two colours as they age and shrink away at the end instead of fading.
+- **Shapes:** `dot`, `spark` (4-point star), `puff` (cloud), `flame` (teardrop that trails its tip behind its on-screen motion), `shard` (ice/debris diamond) and `streak` (speed line along its motion). Set them per call: `fx.emit(x, y, z, { shape, color, color2, grow, spin, ... })`.
+- **Rings:** shockwaves are inked ground bands that thin out as they expand. `burst: true` gives them a spiky comic edge (explosions, landings, cryo nova, round start, player death).
+- **Starbursts:** `fx.burst(x, y, z, { color, size })` pops a comic impact flash card for hits, kills, explosions, teleport arrivals and the landing.
+- **Palette and recipes:** the shared palette lives in `FXC` in `fx.js`, and `deep(color)` returns the darker second tone for power-coloured effects. The recipes are on `Game`:
+  - `poof`: teleport, invisibility, shapeshift, clones.
+  - `hitFx`: punches.
+  - `explosionFx`: fireballs.
+  - `dustRing`: take-off, landing, cryo frost.
+- **Phones:** particle size now scales with the device pixel ratio, so effects are the same size on screen on high-DPI phones. Size is capped at 20% of screen height, so nothing fills the view when it bursts right in front of the camera.
+- **Review tool:** `pipeline/fxlab.cjs <url> <outprefix> [names]` triggers each effect from a fixed spot and freezes the frame for screenshots. `fxgrid.py` tiles the shots into a contact sheet. `build.sh` runs the Vite build plus the artifact-safe post steps.
+
+## 80s cartoon sound pass (`src/audio.js`)
+- **Style:** every sound is still synthesised in code (no audio files), redesigned after 80s Saturday-morning superhero cartoons:
+  - punch foley with a crack and a whap;
+  - timpani and crash-cymbal hits;
+  - brass stabs: a power chord on landing, "dun dun DUNNN" for the nemesis, a "ta-da" on cash out, a sad trombone on elimination;
+  - analog synth zaps and sweeps, a theremin for telekinesis, slide whistles and spring boings.
+- **Mix:** all sounds go through a lightly saturated bus, a glue compressor and a synthesised spring reverb.
+- **Building blocks:** `thump`, `timp`, `crash`, `brass`, `bell` (FM), `boing`, `slide`, plus the `osc` and `noise` voices. The public `SFX.*` API is unchanged.
+- **Variation:** frequent sounds (punch, kill, whoosh, coin) vary their pitch randomly on every play and are rate-limited, so a brawl doesn't turn into noise.
+- **Levels:** per-event loudness trims live in `VOL` at the top of the file.
+- **Offline rendering:** `AudioEngine.attach(ctx)` also accepts an `OfflineAudioContext`. `pipeline/sfxrender.cjs` uses it to render every sound to WAV and report its peak, RMS and length.

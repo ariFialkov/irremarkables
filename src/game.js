@@ -4,7 +4,7 @@ import { onAuthoredHero } from './authored.js';
 import { CONFIG } from './config.js';
 import { POWERS, counterPowerFor } from './powers.js';
 import { World } from './world.js';
-import { FX } from './fx.js';
+import { FX, FXC, deep } from './fx.js';
 import { BamText } from './bam.js';
 import { Collectibles } from './collectibles.js';
 import { Character, setCharacterWorld } from './entities.js';
@@ -89,7 +89,7 @@ export class Game {
       for (const ch of all) if (ch.arch && ch.arch.suit === suit && ch.alive !== false) ch.refreshLook();
     });
     setCharacterWorld(this.world);
-    this.fx = new FX(this.scene);
+    this.fx = new FX(this.scene, this.renderer);
     this.bams = new BamText(this.scene);
     this.collectibles = new Collectibles(this.scene, this.world);
     this.ui = new UI();
@@ -171,6 +171,43 @@ export class Game {
     const far = clamp(0.8 + dc / 30, 0.8, 1.9);
     this.bams.spawn(x + rand(-0.25, 0.25), y + rand(-0.1, 0.25), z + rand(-0.25, 0.25), pick(BAM_WORDS[kind] || BAM_WORDS.hit),
       { size: st.size * sizeMul * far, camPos: this.camPos });
+  }
+
+  // world sounds fade with distance from the camera (bots brawling across the
+  // map shouldn't drown out your own fight); anything you cause stays full
+  sfxAt(name, x, z, mine = false) {
+    if (mine) { SFX[name](); return; }
+    const d = Math.hypot(x - this.camPos.x, z - this.camPos.z);
+    if (d > 38) return;
+    const k = 1 - d / 38;
+    SFX.play(name, k * k * 0.8);
+  }
+
+  // ---- shared comic VFX recipes (fx.js draws them) ----
+  // a cel-shaded cloud poof: puffs that swell and pop, plus a couple of sparks
+  poof(x, y, z, c1, c2, n = 10) {
+    this.fx.emit(x, y, z, { count: n, shape: 'puff', color: c1, color2: c2, speed: 3.2, life: 0.55, size: 1.7, gravity: 0.6, drag: 3.2, jitter: 0.35, grow: 1.8 });
+  }
+  // a punch connecting: starburst flash and a spray of sparks
+  hitFx(x, y, z, k = 1) {
+    this.fx.burst(x, y, z, { color: FXC.speed, size: 1.9 * k, dur: 0.17 });
+    this.fx.emit(x, y, z, { count: Math.round(6 * k), shape: 'spark', color: FXC.white, color2: FXC.speed, speed: 5, life: 0.3, size: 1.1 * k, gravity: -4, spin: 8 });
+  }
+  // fireball / big boom: fire tongues, rolling smoke, debris and a spiky shockwave
+  explosionFx(x, y, z) {
+    this.fx.burst(x, y, z, { color: FXC.fire, size: 4.2, dur: 0.28 });
+    this.fx.emit(x, y, z, { count: 26, shape: 'flame', color: FXC.fireHot, color2: FXC.fireDeep, speed: 11, life: 0.65, size: 3, gravity: 4, drag: 2.5 });
+    this.fx.emit(x, y + 0.5, z, { count: 12, shape: 'puff', color: FXC.smoke, color2: FXC.smokeDark, speed: 4, life: 1.3, size: 2.6, gravity: 2.5, drag: 2, grow: 2.3, jitter: 0.8 });
+    this.fx.emit(x, y, z, { count: 12, shape: 'spark', color: FXC.fireHot, color2: FXC.fire, speed: 15, life: 0.5, size: 1.3, gravity: -10 });
+    this.fx.ring(x, z, { color: FXC.fire, maxR: 8, dur: 0.6, burst: true });
+  }
+  // ground-level dust skirt kicked out from a stomp, take-off or landing
+  dustRing(x, z, c1, c2, n = 12, speed = 7, size = 1.8) {
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + rand(-0.2, 0.2);
+      this.fx.emitDir(x + Math.sin(a) * 0.6, 0.35, z + Math.cos(a) * 0.6, this._v1.set(Math.sin(a), 0.12, Math.cos(a)),
+        { count: 1, shape: 'puff', color: c1, color2: c2, speed, life: 0.6, size, cone: 0.1, drag: 3.5, grow: 1.9 });
+    }
   }
 
   // ================= BOTS =================
@@ -288,19 +325,19 @@ export class Game {
         const k = Math.min(9, dist * 0.6) / dist;
         const nx = ch.pos.x + dx * k, nz = ch.pos.z + dz * k;
         if (!this.world.isBlocked(nx, nz)) {
-          this.fx.emit(ch.pos.x, 1.2, ch.pos.z, { count: 14, color: 0x7dffca, speed: 5, life: 0.4 });
+          this.poof(ch.pos.x, 1.1, ch.pos.z, FXC.tele, FXC.teleDeep, 7);
           ch.pos.set(nx, 0, nz);
-          this.fx.emit(nx, 1.2, nz, { count: 14, color: 0x7dffca, speed: 5, life: 0.4 });
+          this.poof(nx, 1.1, nz, FXC.tele, FXC.teleDeep, 7);
         }
       } else if (id === 'invisibility') { b.fadeUntil = now() + 2.5; }
       else if (id === 'telekinesis') {
-        this.fx.emit(ch.pos.x, 1.6, ch.pos.z, { count: 10, color: TK_COLOR, speed: 2.5, life: 0.7, gravity: 1 });
+        this.fx.emit(ch.pos.x, 1.6, ch.pos.z, { count: 6, shape: 'spark', color: FXC.tk, color2: FXC.tkDeep, speed: 2.5, life: 0.7, gravity: 1, size: 1.1, spin: 4 });
       }
     }
     if (b.speedBurst && now() < b.speedBurst) {
       speed *= 2.1;
       this.fx.emitDir(ch.pos.x, 1, ch.pos.z, this._v1.set(-dx / (dist || 1), 0, -dz / (dist || 1)),
-        { count: 1, color: 0xffe45c, speed: 3, life: 0.3, size: 1.2, cone: 0.2 });
+        { count: 1, shape: 'streak', color: FXC.speed, color2: FXC.speedDeep, speed: 5, life: 0.3, size: 1.3, cone: 0.15, jitter: 0.4 });
     }
     ch.setOpacity(b.fadeUntil && now() < b.fadeUntil ? 0.25 : 1);
 
@@ -396,7 +433,7 @@ export class Game {
       if (d > h.range + 0.6 || !samePlane(att.ch, tgt.ch)) continue;
       tgt.hp -= h.damage;
       tgt.ch.hitReaction();
-      this.fx.emit(tgt.ch.pos.x, 1.4 + tgt.ch.altitude, tgt.ch.pos.z, { count: 6, color: 0xffffff, speed: 3.5, life: 0.3, size: 1.1 });
+      this.hitFx(tgt.ch.pos.x, 1.4 + tgt.ch.altitude, tgt.ch.pos.z, 0.8);
       if (tgt.hp <= 0) this.killBot(tgt, h.owner === 'clone' ? { byPlayer: true } : { byBot: att });
       else if (h.owner === 'clone' || Math.random() < 0.5) this.bam(tgt.ch.pos.x, 1.5 + tgt.ch.altitude, tgt.ch.pos.z, 'hit', 0.75);
     }
@@ -411,18 +448,28 @@ export class Game {
       const col = b.power.color;
       if (cause === 'shatter') {
         // the block bursts: shards, frost puff, a cold shockwave — nothing left behind
-        this.fx.emit(px, py, pz, { count: 44, color: 0x9df2ff, speed: 11, life: 0.85, size: 2.0, gravity: 4 });
-        this.fx.emit(px, py, pz, { count: 26, color: 0xffffff, speed: 5, life: 0.6, size: 2.6, gravity: -1 });
-        this.fx.emit(px, py - 0.6, pz, { count: 18, color: 0x5fb9ff, speed: 7, life: 0.7, size: 1.4, gravity: 6 });
-        this.fx.ring(px, pz, { color: 0x9df2ff, maxR: 4.5, dur: 0.5 });
+        this.fx.emit(px, py, pz, { count: 26, shape: 'shard', color: FXC.ice, color2: FXC.iceDeep, speed: 10, life: 0.9, size: 1.9, gravity: -16, spin: 10 });
+        this.fx.emit(px, py, pz, { count: 9, shape: 'puff', color: FXC.frost, color2: FXC.frostDeep, speed: 3.5, life: 0.7, size: 2.2, gravity: 0.5, drag: 3 });
+        this.fx.burst(px, py, pz, { color: FXC.ice, size: 2.2 });
+        this.fx.ring(px, pz, { color: FXC.ice, maxR: 4.5, dur: 0.5 });
         this.fx.addShake(0.25);
-        SFX.shatter();
+        this.sfxAt('shatter', px, pz, byPlayer);
       }
-      else if (cause === 'fire') { this.fx.emit(px, py, pz, { count: 30, color: 0xff7a3c, speed: 7, life: 0.7, size: 2.2, gravity: 3 }); }
-      else if (cause === 'slam') { this.fx.emit(px, py, pz, { count: 30, color: TK_COLOR, speed: 9, life: 0.8, size: 1.9 }); SFX.slam(); }
-      else { this.fx.emit(px, py, pz, { count: 24, color: col, speed: 8, life: 0.7, size: 1.8 }); }
+      else if (cause === 'fire') {
+        this.fx.emit(px, py, pz, { count: 16, shape: 'flame', color: FXC.fireHot, color2: FXC.fireDeep, speed: 5, life: 0.6, size: 2.2, gravity: 5 });
+        this.fx.emit(px, py + 0.4, pz, { count: 6, shape: 'puff', color: FXC.smoke, color2: FXC.smokeDark, speed: 2, life: 1.0, size: 1.8, gravity: 2.5, drag: 2, grow: 2.2 });
+      } else if (cause === 'slam') {
+        this.fx.emit(px, 0.4, pz, { count: 12, shape: 'puff', color: FXC.dust, color2: FXC.dustDeep, speed: 6, life: 0.7, size: 2.0, gravity: 0, drag: 3.5, spread: 1.3 });
+        this.fx.emit(px, py, pz, { count: 10, shape: 'spark', color: FXC.tk, color2: FXC.tkDeep, speed: 8, life: 0.5, size: 1.3 });
+        this.fx.burst(px, py, pz, { color: FXC.tk, size: 2.4 });
+        this.sfxAt('slam', px, pz, byPlayer);
+      } else {
+        this.fx.emit(px, py, pz, { count: 14, shape: 'spark', color: col, color2: deep(col), speed: 8, life: 0.55, size: 1.4, spin: 6 });
+        this.fx.emit(px, py, pz, { count: 7, shape: 'puff', color: FXC.white, color2: col, speed: 3, life: 0.6, size: 1.9, gravity: 0.5, drag: 3 });
+        this.fx.burst(px, py, pz, { color: col, size: 2.0 });
+      }
       this.fx.ring(px, pz, { color: col, maxR: 3, dur: 0.4 });
-      SFX.kill();
+      this.sfxAt('kill', px, pz, byPlayer);
       const word = cause === 'fire' ? 'fire' : cause === 'shatter' ? 'shatter' : cause === 'slam' ? 'slam' : cause === 'squish' ? 'squish' : 'kill';
       this.bam(px, py + 0.4, pz, word, byPlayer ? 1 : 0.8);
     }
@@ -533,8 +580,9 @@ export class Game {
     this.ui.setHP(1);
     this.controls.setEnabled(true);
     this.ui.announce(power.name.toUpperCase(), { dur: 1800, icon: power.id });
-    this.fx.ring(p.x, p.z, { color: power.color, maxR: 6, dur: 0.7 });
-    this.fx.emit(p.x, 1, p.z, { count: 30, color: power.color, speed: 7, life: 0.8 });
+    this.fx.ring(p.x, p.z, { color: power.color, maxR: 6, dur: 0.7, burst: true });
+    this.fx.emit(p.x, 1, p.z, { count: 18, shape: 'spark', color: power.color, color2: deep(power.color), speed: 7, life: 0.8, size: 1.4, spin: 5 });
+    this.poof(p.x, 0.5, p.z, FXC.white, power.color, 8);
     SFX.whoosh();
   }
 
@@ -566,7 +614,8 @@ export class Game {
     this.setPlayerPower(power);
     const p = this.player.ch.pos;
     this.fx.ring(p.x, p.z, { color: power.color, maxR: 5, dur: 0.5 });
-    this.fx.emit(p.x, 1.4, p.z, { count: 26, color: power.color, speed: 6, life: 0.7 });
+    this.fx.emit(p.x, 1.4, p.z, { count: 14, shape: 'spark', color: power.color, color2: deep(power.color), speed: 6, life: 0.7, size: 1.3, spin: 5 });
+    this.poof(p.x, 1.0, p.z, FXC.white, power.color, 7);
     this.ui.announce(power.name.toUpperCase(), { dur: 1500, icon: power.id });
     SFX.morph();
   }
@@ -617,7 +666,7 @@ export class Game {
       }
       b.hp -= h.damage;
       b.ch.hitReaction();
-      this.fx.emit(b.ch.pos.x, 1.4 + b.ch.altitude, b.ch.pos.z, { count: 8, color: 0xffffff, speed: 4, life: 0.3, size: 1.2 });
+      this.hitFx(b.ch.pos.x, 1.4 + b.ch.altitude, b.ch.pos.z, 1);
       this.fx.addShake(0.1 + h.damage * 0.002);
       SFX.punch();
       if (b.hp <= 0) this.killBot(b, { byPlayer: true });
@@ -649,8 +698,9 @@ export class Game {
       const pr = this.projectiles[i];
       pr.life -= dt;
       pr.pos.addScaledVector(pr.dir, pr.speed * dt);
-      this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 6, color: 0xff7a3c, speed: 2.5, life: 0.45, size: 2.6, gravity: 2, jitter: 0.35 });
-      this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 2, color: 0xffd166, speed: 2, life: 0.3, size: 2 });
+      this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 3, shape: 'flame', color: FXC.fireHot, color2: FXC.fireDeep, speed: 2, life: 0.4, size: 2.6, gravity: 3, jitter: 0.3 });
+      this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 1, shape: 'dot', color: FXC.white, color2: FXC.fireHot, speed: 0.5, life: 0.12, size: 3.6, gravity: 0 });
+      if (Math.random() < 0.4) this.fx.emit(pr.pos.x, pr.pos.y + 0.2, pr.pos.z, { count: 1, shape: 'puff', color: FXC.smoke, color2: FXC.smokeDark, speed: 0.6, life: 0.7, size: 1.3, gravity: 1.5, drag: 2, grow: 2 });
       const fromBot = pr.owner === 'bot';
       if (fromBot && pr.homing && this.player?.ch.alive) {
         // hunters' fireballs curve toward the player so a dodge isn't free
@@ -667,11 +717,9 @@ export class Game {
       }
       const hitPlayer = fromBot && this.player?.ch.alive && chestDist(this.player.ch, pr.pos) < 1.8;
       if (pr.life <= 0 || hitWall || hitBot || hitPlayer) {
-        SFX.explosion();
+        this.sfxAt('explosion', pr.pos.x, pr.pos.z, !fromBot);
         this.fx.addShake(0.8);
-        this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 60, color: 0xff7a3c, speed: 14, life: 0.9, size: 3, gravity: -2 });
-        this.fx.emit(pr.pos.x, pr.pos.y, pr.pos.z, { count: 30, color: 0xffd166, speed: 10, life: 0.7, size: 2.2 });
-        this.fx.ring(pr.pos.x, pr.pos.z, { color: 0xff7a3c, maxR: 8, dur: 0.6 });
+        this.explosionFx(pr.pos.x, pr.pos.y, pr.pos.z);
         this.bam(pr.pos.x, pr.pos.y + 0.5, pr.pos.z, 'boom', 1.2);
         for (const b of [...this.bots]) {
           if (b.ch.alive && b !== pr.bot && chestDist(b.ch, pr.pos) < 7.5) {
@@ -721,21 +769,22 @@ export class Game {
         P.flying = !P.flying;
         if (P.flying) {
           SFX.whoosh();
-          this.fx.ring(px, pz, { color: 0x8ecbff, maxR: 4, dur: 0.5 });
-          this.fx.emitDir(px, 0.5, pz, this._v1.set(0, -1, 0), { count: 22, color: 0x8ecbff, speed: 6, life: 0.6, cone: 0.6 });
+          this.fx.ring(px, pz, { color: FXC.sky, maxR: 4, dur: 0.5 });
+          this.dustRing(px, pz, FXC.sky, FXC.skyDeep, 10, 5);
         }
         break;
       }
       case 'speed': {
         P.speedUntil = t + 3;
         SFX.whoosh();
-        this.fx.ring(px, pz, { color: 0xffe45c, maxR: 5, dur: 0.45 });
+        this.fx.ring(px, pz, { color: FXC.speed, maxR: 5, dur: 0.45 });
+        this.fx.emit(px, 1, pz, { count: 10, shape: 'streak', color: FXC.speed, color2: FXC.speedDeep, speed: 9, life: 0.35, size: 1.3, gravity: 0, drag: 2, spread: 1.2 });
         break;
       }
       case 'invisibility': {
         P.invisUntil = t + 5;
         SFX.invis();
-        this.fx.emit(px, py, pz, { count: 24, color: 0xbfc7de, speed: 4, life: 0.6, size: 1.6 });
+        this.poof(px, py, pz, FXC.invis, FXC.invisDeep, 12);
         for (const b of this.bots) if (b.target === 'player' && !(b.hunter && this.director.phase === 'strike')) b.target = null;
         break;
       }
@@ -746,8 +795,9 @@ export class Game {
       }
       case 'cryo': {
         SFX.freeze();
-        this.fx.ring(px, pz, { color: 0x9df2ff, maxR: 10, dur: 0.8 });
-        this.fx.emit(px, 0.6, pz, { count: 70, color: 0x9df2ff, speed: 11, life: 0.9, size: 1.8, gravity: -1, spread: 1.2 });
+        this.fx.ring(px, pz, { color: FXC.ice, maxR: 10, dur: 0.8, burst: true });
+        this.fx.emit(px, 0.8, pz, { count: 22, shape: 'shard', color: FXC.ice, color2: FXC.iceDeep, speed: 13, life: 0.75, size: 1.25, gravity: -4, spread: 1.3, spin: 8 });
+        this.dustRing(px, pz, FXC.frost, FXC.frostDeep, 12, 9, 1.4);
         this.fx.addShake(0.3);
         for (const b of this.bots) {
           if (b.ch.alive && !b.held && b.ch.pos.distanceTo(ch.pos) < 10 && Math.abs(b.ch.altitude - ch.altitude) < 4) {
@@ -767,10 +817,12 @@ export class Game {
         }
         if (nx === px && nz === pz) { used = false; break; }
         SFX.teleport();
-        this.fx.emit(px, py, pz, { count: 26, color: 0x7dffca, speed: 6, life: 0.5, size: 1.8 });
+        this.poof(px, py, pz, FXC.tele, FXC.teleDeep, 11);
+        this.fx.emit(px, py, pz, { count: 8, shape: 'spark', color: FXC.tele, color2: FXC.teleDeep, speed: 6, life: 0.4, size: 1.2 });
         ch.pos.set(nx, 0, nz);
-        this.fx.emit(nx, py, nz, { count: 26, color: 0x7dffca, speed: 6, life: 0.5, size: 1.8 });
-        this.fx.ring(nx, nz, { color: 0x7dffca, maxR: 4, dur: 0.45 });
+        this.poof(nx, py, nz, FXC.tele, FXC.teleDeep, 11);
+        this.fx.burst(nx, py, nz, { color: FXC.tele, size: 2.2 });
+        this.fx.ring(nx, nz, { color: FXC.tele, maxR: 4, dur: 0.45 });
         break;
       }
       case 'xray': {
@@ -786,7 +838,8 @@ export class Game {
         if (ch.propMesh || P.flying || P.tk) { used = false; break; }
         P.disguiseUntil = t + 90;   // safety cap; moving ends it sooner
         SFX.morph();
-        this.fx.emit(px, py, pz, { count: 30, color: 0xff9de2, speed: 5, life: 0.7, size: 1.8 });
+        this.poof(px, py, pz, FXC.pink, FXC.pinkDeep, 14);
+        this.fx.emit(px, py, pz, { count: 8, shape: 'spark', color: FXC.pink, color2: FXC.pinkDeep, speed: 5, life: 0.5, size: 1.2, spin: 6 });
         ch.setOpacity(1);
         const pitch = CONFIG.BLOCK + CONFIG.ROAD;
         const kind = pick(this.world.themeAt(Math.round(px / pitch), Math.round(pz / pitch)) === 'suburb'
@@ -802,12 +855,12 @@ export class Game {
         for (let i = 0; i < 2; i++) {
           const cch = new Character(this.scene, { name: 'YOU', power: P.powerMain, paletteSeed: ch.paletteSeed });
           cch.pos.set(px + rand(-2, 2), 0, pz + rand(-2, 2));
-          this.fx.emit(cch.pos.x, 1.2, cch.pos.z, { count: 20, color: 0xffb27d, speed: 5, life: 0.6 });
+          this.poof(cch.pos.x, 1.0, cch.pos.z, FXC.dupe, FXC.dupeDeep, 9);
           this.clones.push({
             ch: cch, until: t + 10, attackCd: 0, target: null, repath: 0,
           });
         }
-        this.fx.ring(px, pz, { color: 0xffb27d, maxR: 5, dur: 0.5 });
+        this.fx.ring(px, pz, { color: FXC.dupe, maxR: 5, dur: 0.5 });
         break;
       }
     }
@@ -837,7 +890,7 @@ export class Game {
 
     if (!kind) {
       // fizzle — nothing to grab
-      this.fx.emit(ch.pos.x, 1.6, ch.pos.z, { count: 8, color: TK_COLOR, speed: 2, life: 0.4 });
+      this.fx.emit(ch.pos.x, 1.6, ch.pos.z, { count: 5, shape: 'spark', color: FXC.tk, color2: FXC.tkDeep, speed: 2, life: 0.4, size: 1.1 });
       return;
     }
 
@@ -885,7 +938,7 @@ export class Game {
 
     // purple channel aura
     tk.auraT += dt;
-    this.fx.emit(pos.x, pos.y + 1.2, pos.z, { count: 2, color: TK_COLOR, speed: 1.6, life: 0.45, size: 1.5, gravity: 2, jitter: 0.7 });
+    this.fx.emit(pos.x, pos.y + 1.2, pos.z, { count: 1, shape: 'spark', color: FXC.tk, color2: FXC.tkDeep, speed: 1.6, life: 0.5, size: 1.2, gravity: 2, jitter: 0.7, spin: 5 });
     if (tk.auraT > 0.3) {
       tk.auraT = 0;
       this.fx.ring(pos.x, pos.z, { color: TK_COLOR, maxR: 2.2, dur: 0.4 });
@@ -918,7 +971,8 @@ export class Game {
         ch.startAttack();   // hurl with a throw motion
         SFX.whoosh();
         this.fx.addShake(0.35);
-        this.fx.emit(pos.x, bobY + 1, pos.z, { count: 20, color: TK_COLOR, speed: 6, life: 0.5, size: 1.8 });
+        this.fx.emit(pos.x, bobY + 1, pos.z, { count: 12, shape: 'spark', color: FXC.tk, color2: FXC.tkDeep, speed: 6, life: 0.5, size: 1.4, spin: 6 });
+        this.fx.burst(pos.x, bobY + 1, pos.z, { color: FXC.tk, size: 1.8 });
       }
     }
   }
@@ -974,7 +1028,7 @@ export class Game {
 
       if (th.mode === 'throw') {
         // trailing sparkle
-        this.fx.emit(nx, Math.max(0.5, ny) + 1, nz, { count: 2, color: TK_COLOR, speed: 1.5, life: 0.35, size: 1.4 });
+        this.fx.emit(nx, Math.max(0.5, ny) + 1, nz, { count: 1, shape: 'streak', color: FXC.tk, color2: FXC.tkDeep, speed: 1.5, life: 0.3, size: 1.3 });
         // mow down anyone in the flight path
         for (const other of [...this.bots]) {
           if (!other.ch.alive || other.held) continue;
@@ -999,7 +1053,8 @@ export class Game {
             this.killBot(th.bot, { byPlayer: true, cause: 'slam' });
           } else {
             SFX.slam();
-            this.fx.emit(nx, Math.max(0.5, ny), nz, { count: 30, color: 0x9aa0a8, speed: 8, life: 0.7, size: 1.8 });
+            this.fx.emit(nx, Math.max(0.5, ny), nz, { count: 12, shape: 'puff', color: FXC.dust, color2: FXC.dustDeep, speed: 6, life: 0.7, size: 1.9, gravity: 0, drag: 3, spread: 1.3 });
+            this.fx.emit(nx, Math.max(0.5, ny), nz, { count: 10, shape: 'shard', color: 0xb8bec6, color2: 0x5d636c, speed: 9, life: 0.7, size: 1.1, gravity: -16, spin: 10 });
             this.world.removeLiftable(th.prop);
           }
         } else {
@@ -1009,7 +1064,7 @@ export class Game {
             th.bot.ch.altitude = 0;
             th.bot.ch.setHeld(false);
             th.bot.repath = 1.5;
-            this.fx.emit(nx, 0.6, nz, { count: 8, color: 0xffffff, speed: 3, life: 0.3, size: 1.1 });
+            this.fx.emit(nx, 0.4, nz, { count: 5, shape: 'puff', color: FXC.dust, color2: FXC.dustDeep, speed: 3, life: 0.45, size: 1.3, gravity: 0, drag: 3 });
           } else {
             th.prop.mesh.position.y = this.world.groundHeightAt(nx, nz);
             th.prop.mesh.rotation.x = 0;
@@ -1026,7 +1081,7 @@ export class Game {
     if (!ch.propMesh && !ch.disguise) return;
     P.disguiseUntil = 0;
     ch.undisguise();
-    this.fx.emit(ch.pos.x, 1.4, ch.pos.z, { count: 18, color: 0xff9de2, speed: 5, life: 0.5 });
+    this.poof(ch.pos.x, 1.2, ch.pos.z, FXC.pink, FXC.pinkDeep, 10);
     SFX.morph();
     // bursting out of a disguise at someone drops them in one blow
     if (ambush) P.ambushUntil = now() + 1.2;
@@ -1038,9 +1093,11 @@ export class Game {
     SFX.landing();
     this.fx.addShake(1.1);
     this.ui.flash();
-    this.fx.ring(ch.pos.x, ch.pos.z, { color: 0xffd166, maxR: 9, dur: 0.7 });
-    this.fx.ring(ch.pos.x, ch.pos.z, { color: 0xffffff, maxR: 5, dur: 0.5 });
-    this.fx.emit(ch.pos.x, 0.6, ch.pos.z, { count: 60, color: 0xffd166, speed: 12, life: 0.8, size: 2.2 });
+    this.fx.ring(ch.pos.x, ch.pos.z, { color: FXC.gold, maxR: 9, dur: 0.7, burst: true });
+    this.fx.ring(ch.pos.x, ch.pos.z, { color: FXC.white, maxR: 5, dur: 0.5 });
+    this.dustRing(ch.pos.x, ch.pos.z, FXC.dust, FXC.dustDeep, 18, 10);
+    this.fx.emit(ch.pos.x, 0.6, ch.pos.z, { count: 12, shape: 'shard', color: 0xb8bec6, color2: 0x5d636c, speed: 11, life: 0.8, size: 1.2, gravity: -18, spin: 10 });
+    this.fx.burst(ch.pos.x, 1.0, ch.pos.z, { color: FXC.gold, size: 3.4, dur: 0.26 });
     this.bam(ch.pos.x, 1.6, ch.pos.z, 'boom', 1.3);
     for (const b of [...this.bots]) {
       if (b.ch.alive && b.ch.pos.distanceTo(ch.pos) < CONFIG.LANDING_RADIUS && samePlane(b.ch, ch)) this.killBot(b, { byPlayer: true });
@@ -1080,8 +1137,8 @@ export class Game {
         this.cancelTelekinesis(true);
         this.ui.announce('SUPERHERO LANDING — STEER YOUR DROP', { dur: 2200 });
         SFX.whoosh();
-        this.fx.ring(P.ch.pos.x, P.ch.pos.z, { color: 0xffd166, maxR: 4, dur: 0.4 });
-        this.fx.emitDir(P.ch.pos.x, 0.5, P.ch.pos.z, this._v1.set(0, -1, 0), { count: 26, color: 0xffd166, speed: 7, life: 0.6, cone: 0.6 });
+        this.fx.ring(P.ch.pos.x, P.ch.pos.z, { color: FXC.gold, maxR: 4, dur: 0.4 });
+        this.dustRing(P.ch.pos.x, P.ch.pos.z, FXC.dust, FXC.dustDeep, 10, 5);
       }
     }
   }
@@ -1098,7 +1155,8 @@ export class Game {
     P.ch.hitReaction();
     SFX.hurt();
     this.fx.addShake(0.3);
-    this.fx.emit(P.ch.pos.x, 1.4 + P.ch.altitude, P.ch.pos.z, { count: 8, color: 0xff5470, speed: 4, life: 0.4 });
+    this.fx.emit(P.ch.pos.x, 1.4 + P.ch.altitude, P.ch.pos.z, { count: 6, shape: 'spark', color: FXC.hurt, color2: FXC.hurtDeep, speed: 4, life: 0.4, size: 1.2 });
+    this.fx.burst(P.ch.pos.x, 1.4 + P.ch.altitude, P.ch.pos.z, { color: FXC.hurt, size: 1.4 });
     if (P.ch.propMesh) this.revealDisguise();   // a bin that says "oof" is no longer a bin
     if (P.ch.hp > 0) this.bam(P.ch.pos.x, 1.6 + P.ch.altitude, P.ch.pos.z, 'hurt');
 
@@ -1187,12 +1245,12 @@ export class Game {
     const p = this.player.ch.pos;
     const s = blink ? this.world.randomOpenPos(p, 3, 6) : this.hiddenSpotNear(p, 14, 22);
     if (blink) {
-      this.fx.emit(b.ch.pos.x, 1.2, b.ch.pos.z, { count: 14, color: 0x7dffca, speed: 5, life: 0.4 });
+      this.poof(b.ch.pos.x, 1.1, b.ch.pos.z, FXC.tele, FXC.teleDeep, 8);
       SFX.teleport();
     }
     b.ch.pos.set(s.x, 0, s.z);
     b.ch.altitude = this.player.ch.altitude > 2 ? this.player.ch.altitude : 0;
-    if (blink) this.fx.emit(s.x, 1.2, s.z, { count: 14, color: 0x7dffca, speed: 5, life: 0.4 });
+    if (blink) this.poof(s.x, 1.1, s.z, FXC.tele, FXC.teleDeep, 8);
   }
 
   updateHunt(dt) {
@@ -1272,8 +1330,11 @@ export class Game {
     this.fx.addShake(1.2);
     this.ui.flash();
     const c = P.ch.pos;
-    this.fx.emit(c.x, 1.4 + P.ch.altitude, c.z, { count: 50, color: killer ? killer.power.color : 0xff5470, speed: 9, life: 1.1, size: 2 });
-    this.fx.ring(c.x, c.z, { color: 0xff2038, maxR: 7, dur: 0.8 });
+    const kc = killer ? killer.power.color : FXC.hurt;
+    this.fx.emit(c.x, 1.4 + P.ch.altitude, c.z, { count: 22, shape: 'spark', color: kc, color2: deep(kc), speed: 9, life: 1.0, size: 1.6, spin: 6 });
+    this.fx.emit(c.x, 1.2 + P.ch.altitude, c.z, { count: 10, shape: 'puff', color: FXC.white, color2: kc, speed: 3.5, life: 0.9, size: 2.2, gravity: 0.5, drag: 3 });
+    this.fx.burst(c.x, 1.4 + P.ch.altitude, c.z, { color: FXC.hurt, size: 3, dur: 0.3 });
+    this.fx.ring(c.x, c.z, { color: FXC.hurt, maxR: 7, dur: 0.8, burst: true });
     this.world.setXray(false);
     this.collectibles.setXray(false);
   }
@@ -1415,8 +1476,8 @@ export class Game {
         if (m.t >= CONFIG.METEOR_HANG_TIME) { m.phase = 'down'; m.t = 0; ch.dive = true; SFX.whoosh(); }
       } else {
         ch.altitude -= dt * CONFIG.METEOR_FALL_SPEED;
-        this.fx.emit(ch.pos.x, ch.altitude + 1, ch.pos.z, { count: 4, color: 0xffd166, speed: 2.5, life: 0.45, size: 2.2, gravity: -1 });
-        this.fx.emit(ch.pos.x, ch.altitude + 1, ch.pos.z, { count: 2, color: 0xff7a3c, speed: 2, life: 0.4, size: 1.8 });
+        this.fx.emitDir(ch.pos.x, ch.altitude + 1, ch.pos.z, this._v1.set(0, 1, 0), { count: 3, shape: 'flame', color: FXC.fireHot, color2: FXC.fireDeep, speed: 6, life: 0.4, size: 2.4, cone: 0.25, jitter: 0.3 });
+        this.fx.emitDir(ch.pos.x, ch.altitude + 1, ch.pos.z, this._v1.set(0, 1, 0), { count: 1, shape: 'streak', color: FXC.gold, color2: FXC.goldDeep, speed: 10, life: 0.3, size: 1.4, cone: 0.1, jitter: 0.5 });
         if (ch.altitude <= 0) {
           ch.altitude = 0;
           ch.dive = false;
@@ -1437,12 +1498,12 @@ export class Game {
       else ch.altitude = Math.max(want, ch.altitude - dt * CONFIG.FLIGHT_DESCEND);
       if (Math.random() < 0.6) {
         this.fx.emitDir(ch.pos.x, ch.altitude + 0.4, ch.pos.z, this._v1.set(-mx, 0, -mz),
-          { count: 1, color: 0x8ecbff, speed: 4, life: 0.4, size: 1.4, cone: 0.3 });
+          { count: 1, shape: 'streak', color: FXC.sky, color2: FXC.skyDeep, speed: 6, life: 0.35, size: 1.3, cone: 0.15, jitter: 0.35 });
       }
     } else if (ch.altitude > 0) {
       ch.altitude = Math.max(0, ch.altitude - dt * 16);
       if (ch.altitude === 0 && P.prevAlt > 3.5) {
-        this.fx.ring(ch.pos.x, ch.pos.z, { color: 0xffffff, maxR: 3, dur: 0.4 }); this.fx.addShake(0.3); SFX.punch();
+        this.fx.ring(ch.pos.x, ch.pos.z, { color: FXC.white, maxR: 3, dur: 0.4 }); this.dustRing(ch.pos.x, ch.pos.z, FXC.dust, FXC.dustDeep, 8, 4); this.fx.addShake(0.3); SFX.punch();
       }
     }
     this.world.resolve(ch.pos, 0.6 * ch.curScale, ch.altitude);
@@ -1450,16 +1511,19 @@ export class Game {
     // speed streaks
     if (P.speedUntil > t && moving) {
       this.fx.emitDir(ch.pos.x, 0.9, ch.pos.z, this._v1.set(-mx, 0.05, -mz),
-        { count: 2, color: 0xffe45c, speed: 6, life: 0.35, size: 1.5, cone: 0.15 });
+        { count: 1, shape: 'streak', color: FXC.speed, color2: FXC.speedDeep, speed: 8, life: 0.3, size: 1.5, cone: 0.1, jitter: 0.5 });
+      if (Math.random() < 0.35) this.fx.emit(ch.pos.x, 0.3, ch.pos.z, { count: 1, shape: 'puff', color: FXC.dust, color2: FXC.dustDeep, speed: 0.5, life: 0.4, size: 1.1, gravity: 0, drag: 3 });
     }
 
     // flame cone (pyrokinesis channel)
     if (P.flameUntil > t) {
       const fxd = this._v1.set(Math.sin(ch.yaw), 0.05, Math.cos(ch.yaw));
       this.fx.emitDir(ch.pos.x + fxd.x, 1.3 + ch.altitude, ch.pos.z + fxd.z, fxd,
-        { count: 10, color: 0xff7a3c, speed: 15, life: 0.5, size: 2.6, cone: 0.22, gravity: 2 });
+        { count: 6, shape: 'flame', color: FXC.fireHot, color2: FXC.fireDeep, speed: 15, life: 0.5, size: 2.6, cone: 0.22, gravity: 3 });
       this.fx.emitDir(ch.pos.x + fxd.x, 1.3 + ch.altitude, ch.pos.z + fxd.z, fxd,
-        { count: 3, color: 0xffd166, speed: 13, life: 0.35, size: 2, cone: 0.18 });
+        { count: 2, shape: 'flame', color: FXC.white, color2: FXC.fire, speed: 12, life: 0.3, size: 1.8, cone: 0.15 });
+      if (Math.random() < 0.3) this.fx.emitDir(ch.pos.x + fxd.x * 3, 1.8 + ch.altitude, ch.pos.z + fxd.z * 3, fxd,
+        { count: 1, shape: 'puff', color: FXC.smoke, color2: FXC.smokeDark, speed: 5, life: 0.8, size: 1.6, cone: 0.3, gravity: 2, drag: 2, grow: 2.2 });
       for (const b of [...this.bots]) {
         if (!b.ch.alive || b.held) continue;
         const dx = b.ch.pos.x - ch.pos.x, dz = b.ch.pos.z - ch.pos.z;
@@ -1519,7 +1583,7 @@ export class Game {
     for (let i = this.clones.length - 1; i >= 0; i--) {
       const c = this.clones[i];
       if (t > c.until) {
-        this.fx.emit(c.ch.pos.x, 1.2, c.ch.pos.z, { count: 16, color: 0xffb27d, speed: 5, life: 0.5 });
+        this.poof(c.ch.pos.x, 1.0, c.ch.pos.z, FXC.dupe, FXC.dupeDeep, 8);
         c.ch.dispose();
         this.clones.splice(i, 1);
         continue;
